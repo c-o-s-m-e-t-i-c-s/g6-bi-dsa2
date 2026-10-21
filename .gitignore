@@ -1,0 +1,14 @@
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Environment variables and secrets
+.env
+
+# Large datasets
+*.csv
+*.data
+
+# IDE settings
+.vscode/
