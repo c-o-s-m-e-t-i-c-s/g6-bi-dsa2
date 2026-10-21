@@ -1,0 +1,329 @@
+// TOTAL TABLES WITH COLUMNS AND THEIR DESCRIPTION:
+// IF YOU WANT A GOOD VISUALIZATION, JUST GO TO:
+// dbdiagram.io
+// AND PASTE THE ENTIRE CODE IN IT. TO ALIGN IT, PRESS 2 THEN 1 OR 2 AND PRESS ENTER.
+// Patient Table
+Table STG_EHP__PATN { 
+  PAT_ID VARCHAR // Unique identifier for the patient
+  F_NAME VARCHAR // Patient's first name
+  L_NAME VARCHAR // Patient's last name / surname
+  M_NAME VARCHAR // Patient's middle name
+  GEN_CD INT // Numeric code representing gender
+  GEN_DES VARCHAR // Text description of gender
+  DOB DATE // Patient's date of birth
+  CON_NO VARCHAR // Patient's contact phone number
+  EM_ADD VARCHAR // Patient's email address
+  EC_F_NAME VARCHAR // Emergency contact first name
+  EC_L_NAME VARCHAR // Emergency contact last name
+  EC_M_NAME VARCHAR // Emergency contact middle name
+  EC_CON_NO VARCHAR // Emergency contact phone number
+  B_TYPE VARCHAR // Patient's blood type (e.g., A+, O-)
+  MAR_ST VARCHAR // Marital status (e.g., Single, Married)
+  NAT_ID_S VARCHAR // State that issued the national ID
+  NAT_ID_T VARCHAR // Type of national ID (e.g., Passport, SSN)
+  NAT_ID_N VARCHAR // National ID number
+  NAT_ID_E DATE // Expiry date of the national ID
+}
+// Allergy Table
+Table STG_EHP__ALGY {
+  ALG_ID VARCHAR(20) // Unique allergy identifier
+  ALG_NAME VARCHAR(100) // Name of the allergy
+}
+// Appointment Table
+Table STG_EHP__APPT {
+  REFR_NO VARCHAR(20) // Appointment reference number
+  PAT_ID VARCHAR(20) // Patient identifier
+  APT_TIME DATETIME // Appointment time
+  CTD_ID VARCHAR(20) // Staff ID who booked the appointment
+  DOC_ID VARCHAR(20) // Doctor identifier
+  ASTAT_CD INT // Appointment status code
+  ASTAT_DES VARCHAR(100) // Appointment status description
+  ATYPE_CD INT // Appointment type code
+  ATYPE_DES VARCHAR(100) // Appointment type description
+}
+// Bill Table
+Table STG_EHP__BILL {
+  REFR_NO VARCHAR(20) // Bill reference number
+  PAT_ID VARCHAR(20) // Patient identifier
+  BILL_DATE DATE // Date bill generated
+  BILL_AMT DECIMAL(10,2) // Bill amount
+  BSTAT_CD INT // Bill status code
+  BSTAT_DES VARCHAR(100) // Bill status description
+  BTYPE_CD INT // Bill type code
+}
+// Diagnosis Table ( 2 Tables to Combine)
+Table STG_EHP__DIAG {
+  REFR_NO VARCHAR(20) // Diagnosis reference number
+  DIG_TOT DECIMAL(10,2) // Total diagnosis cost
+  DIG_EN DATETIME // Admission date/time
+  DIG_SEQ INT // Diagnosis sequence number
+  DIG_CD VARCHAR(20) // Diagnosis code
+  DIG_DES VARCHAR(200) // Diagnosis description
+  DSTAT_CD INT // Diagnosis status code
+  DSTAT_DES VARCHAR(100) // Diagnosis status description
+  DTYPE_CD INT // Recommended treatment type code
+  DTYPE_DES VARCHAR(100) // Treatment type description
+  ROM_ID VARCHAR(20) // Room identifier
+}
+// Department Table
+Table STG_EHP__DPMT {
+  DEP_ID VARCHAR(20) // Department ID
+  DEP_NAME VARCHAR(100) // Department name
+  DEP_DES VARCHAR(200) // Department description
+  DEP_LOC VARCHAR(100) // Department location
+}
+// Equipment Table
+Table STG_EHP__EQPM {
+  EQP_ID VARCHAR(20) // Equipment ID
+  EQP_NAME VARCHAR(100) // Equipment name
+  TYPE_CD INT // Equipment use code
+  TYPE_DES VARCHAR(100) // Equipment use description
+  EQP_CAT_1 VARCHAR(50) // Equipment category 1
+  EQP_CAT_2 VARCHAR(50) // Equipment category 2
+  EQP_CAT_3 VARCHAR(50) // Equipment category 3
+  MODL_NO VARCHAR(50) // Model number
+  STRG_LOC VARCHAR(100) // Storage location
+  ESTAT_CD INT // Equipment status code
+  ESTAT_DES VARCHAR(100) // Equipment status description
+}
+// Insurance Table
+Table STG_EHP__INSR {
+  POL_NO VARCHAR(30) // Policy number
+  PAT_ID VARCHAR(20) // Patient ID
+  COM_NAME VARCHAR(100) // Insurance company name
+  ITYPE_CD INT // Insurance type code
+  ITYPE_DES VARCHAR(100) // Insurance type description
+  POL_ST DATE // Policy start date
+  POL_ED DATE // Policy end date
+  ISTAT_CD INT // Insurance status code
+  ISTAT_DES VARCHAR(100) // Insurance status description
+  CON_NO VARCHAR(20) // Insurance contact number
+}
+// Medicine Bill Table
+Table STG_EHP__MDBL {
+  REFR_NO VARCHAR(20) // Bill reference number
+  PAT_ID VARCHAR(20) // Patient ID
+  BILL_DATE DATE // Bill date
+  BILL_AMT DECIMAL(10,2) // Bill amount
+  BSTAT_CD INT // Bill status code
+  BSTAT_DES VARCHAR(100) // Bill status description
+  BTYPE_CD INT // Bill type code
+}
+// Medicine Table
+Table STG_EHP__MDCN {
+  MED_ID VARCHAR(20) // Medicine ID
+  MED_NAME VARCHAR(100) // Medicine name
+  TYPE_CD INT // Medicine type code
+  TYPE_DES VARCHAR(100) // Medicine type description
+  FORM_CD INT // Medicine form code
+  FORM_DES VARCHAR(100) // Medicine form description
+  STRN_NO DECIMAL(10,2) // Strength value
+  STRN_UN VARCHAR(10) // Strength unit
+  STRG_CD INT // Storage type code
+  STRG_DES VARCHAR(100) // Storage type description
+  FMQTY_NO DECIMAL(10,2) // Quantity per pack
+  FMQTY_UN VARCHAR(10) // Quantity unit
+  MSTAT_CD INT // Medicine status code
+  MSTAT_DES VARCHAR(100) // Medicine status description
+  EXP_MON INT // Expiry in months
+  UN_P_CS INT // Packs per case
+  COST_UN DECIMAL(10,2) // Cost per pack
+}
+//Medical Team
+Table STG_EHP__MEDT {
+  MEDT_ID VARCHAR(20) // Medical team ID
+  TEAM_NO INT // Team number
+  STF_ID VARCHAR(20) // Staff ID
+  ROLE_CD INT // Role code
+  ROLE_DES VARCHAR(100) // Role description
+}
+//Payment Table (3 Tables to Combine)
+Table STG_EHP__PMNT {
+  REFR_NO VARCHAR(20) // Bill reference number
+  PAT_ID VARCHAR(20) // Patient ID
+  BTYPE_CD VARCHAR(20) // Bill type code
+  TOT_PMNT DECIMAL(10,2) // Total payment
+  PMNT_TMS INT // Payment terms count
+  PMNT_NO INT // Payment sequence number
+  PMNT_DATE DATE // Payment date
+  PMNT_AMT DECIMAL(10,2) // Payment amount
+  METH_CD INT // Payment method code
+  METH_DES VARCHAR(100) // Payment method description
+  PSTAT_CD INT // Payment status code
+  PSTAT_DES VARCHAR(100) // Payment status description
+  PMNT_IF VARCHAR(50) // Payment interface ID
+}
+// Patient Allergy Table
+Table STG_EHP__PTAL {
+  PAT_ID VARCHAR(20) // Patient ID
+  ALG_ID VARCHAR(20) // Allergy ID
+  SVR_CD INT // Severity code
+  SVR_DES VARCHAR(100) // Severity description
+  RCT_CD INT // Reaction type code
+  RCT_DES VARCHAR(100) // Reaction description
+}
+//Rooms Table
+Table STG_EHP__ROMS {
+  ROM_ID VARCHAR(20) // Room ID
+  DEP_ID VARCHAR(20) // Department ID
+  PRPS_CD INT // Room purpose code
+  PRPS_DES VARCHAR(100) // Purpose description
+  RTYPE_CD INT // Room type code
+  RTYPE_DES VARCHAR(100) // Room type description
+  CPCT_NO INT // Room capacity
+}
+//Supply Table
+Table STG_EHP__SPLY {
+  SPL_ID VARCHAR(20) // Supply ID
+  MAT_SKU VARCHAR(20) // Material SKU
+  VEN_ACC VARCHAR(20) // Vendor account
+  BTCH_NO VARCHAR(30) // Batch number
+  BTCH_SZ INT // Batch size
+  MFG_DATE DATE // Manufacturing date
+  SPL_QTY DECIMAL(10,2) // Supply quantity
+  SPL_UOM VARCHAR(10) // Unit of measurement
+  SPL_UCT DECIMAL(10,2) // Unit cost
+  WHS_LOC VARCHAR(50) // Warehouse location
+  PAL_ID VARCHAR(20) // Pallet ID
+  RCVD_DATE DATE // Received date
+  RCVD_QTY DECIMAL(10,2) // Quantity received
+  RCVD_STF VARCHAR(20) // Staff who received
+  VRFC_DATE DATE // Verification date
+  VRFC_STF VARCHAR(20) // Staff who verified
+}
+//Staff Table
+Table STG_EHP__STFF {
+  STF_ID VARCHAR(20) // Staff ID
+  F_NAME VARCHAR(50) // First name
+  L_NAME VARCHAR(50) // Last name
+  M_NAME VARCHAR(50) // Middle name
+  GEN_CD INT // Gender code
+  GEN_DES VARCHAR(20) // Gender description
+  DT_BRT DATE // Date of birth
+  DEP_ID VARCHAR(20) // Department ID
+  ROLE_CD INT // Role code
+  ROLE_DES VARCHAR(100) // Role description
+  CON_NO VARCHAR(20) // Contact number
+  EM_ADD VARCHAR(100) // Email address
+  STAT_CD INT // Employment status code
+  STAT_DES VARCHAR(100) // Employment status description
+  HIRE_DATE DATE // Hire date
+  ROLE_DATE DATE // Role assigned date
+  SAL_YR DECIMAL(10,2) // Yearly salary
+  SAL_MN DECIMAL(10,2) // Monthly salary
+  INGST_TMSTMP DATETIME // Ingestion timestamp
+}
+// Medicine Used in Treatment Table (5 Tables to Combine)
+Table STG_EHP__TMMD {
+  REFR_NO VARCHAR(20) // Reference number (Visit)
+  MEDS_TOT DECIMAL(10,2) // Total cost of medicines
+  MEDS_SEQ INT // Medicine sequence
+  MED_ID VARCHAR(20) // Medicine ID
+  QTY_NO DECIMAL(10,2) // Quantity prescribed
+  DOS_CD INT // Dosage code
+  DOS_DES VARCHAR(100) // Dosage description
+  FREQ_CD INT // Frequency code
+  FREQ_DES VARCHAR(100) // Frequency description
+  RUTE_CD INT // Route code
+  RUTE_DES VARCHAR(100) // Route description
+  UNIT_DOS DECIMAL(10,2) // Unit per dose
+}
+// Treatment Table
+Table STG_EHP__TRTM {
+  REFR_NO VARCHAR(20) // Reference number
+  TRTM_TOT DECIMAL(10,2) // Total treatment cost
+  TRTM_EN DATETIME // Treatment entry datetime
+  TTYPE_CD INT // Treatment type code
+  TTYPE_DES VARCHAR(100) // Treatment type description
+  TRTM_CD VARCHAR(20) // Treatment code
+  TSTAT_CD INT // Treatment status code
+  TRTM_DES VARCHAR(200) // Treatment description
+  TSTAT_DES VARCHAR(100) // Treatment status description
+  TRTM_SEQ INT // Treatment sequence number
+}
+//Visits Table
+Table STG_EHP__VIST {
+  REFR_NO VARCHAR(20) // Visit reference number
+  PAT_ID VARCHAR(20) // Patient ID
+  MEDT_ID VARCHAR(20) // Medical team ID
+  VIS_EN DATETIME // Visit entry datetime
+  VIS_EX DATETIME // Visit exit datetime
+  VSTAT_CD INT // Visit status code
+  VSTAT_DES VARCHAR(100) // Visit status description
+  VTYPE_CD INT // Visit type code
+  VTYPE_DES VARCHAR(100) // Visit type description
+  ROM_ID VARCHAR(20) // Room ID
+}
+// Vendor Table
+Table STG_EHP__VNDR {
+  VEN_ACC VARCHAR(20) // Vendor account number
+  VEN_NAME VARCHAR(100) // Vendor name
+  VEN_TYPE VARCHAR(50) // Vendor type
+  LCNS_NO VARCHAR(30) // License number
+  CTRY_NAME VARCHAR(50) // Country name
+  CTRY_CD VARCHAR(10) // Country code
+  CTRY_CON_NO VARCHAR(20) // Vendor contact number
+  VSTAT_CD INT // Vendor status code
+  VSTAT_DES VARCHAR(100) // Vendor status description
+  INGST_TMSTMP DATETIME // Ingestion timestamp
+}
+// Vendor Payment Table
+Table STG_EHP__VPMT {
+  REFR_NO VARCHAR(20) // Payment reference number
+  SPL_ID VARCHAR(20) // Supply ID
+  SPL_CST DECIMAL(10,2) // Supply cost
+  PMNT_TRM INT // Payment terms
+  TRM_NO INT // Term number
+  VPMT_AMT DECIMAL(10,2) // Vendor payment amount
+  PMNT_DATE DATE // Payment date
+  PMNT_DUE DECIMAL(10,2) // Remaining payment
+  VPSTATUS_CD INT // Vendor payment status code
+  VPSTATUS_DES VARCHAR(100) // Vendor payment status description
+  VEN_ACC VARCHAR(20) // Vendor account number
+  ACC_NO VARCHAR(20) // Account number
+  WRE_NO VARCHAR(20) // Wire number
+}
+// Inventory Table (98 Tables to Combine)
+Table STG_EHP__INVN {
+  MAT_SKU VARCHAR(20) // Material SKU
+  INGTN_TS DATETIME // Ingestion timestamp
+  OPEN_QTY DECIMAL(10,2) // Opening quantity
+  OPEN_STF VARCHAR(20) // Staff who opened
+  RCVD_QTY DECIMAL(10,2) // Quantity received
+  RCVD_STF VARCHAR(20) // Staff who received
+  ISSD_QTY DECIMAL(10,2) // Quantity issued
+  ISSD_STF VARCHAR(20) // Staff who issued
+  CLSD_QTY DECIMAL(10,2) // Closed quantity
+  CLSD_STF VARCHAR(20) // Staff who closed
+  VRFC_STF VARCHAR(20) // Staff who verified
+}
+// KEY RELATIONSHIPS:
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__PTAL"."PAT_ID"
+Ref: "STG_EHP__ALGY"."ALG_ID" < "STG_EHP__PTAL"."ALG_ID"
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__APPT"."PAT_ID"
+Ref: "STG_EHP__STFF"."STF_ID" < "STG_EHP__APPT"."CTD_ID"
+Ref: "STG_EHP__STFF"."STF_ID" < "STG_EHP__APPT"."DOC_ID"
+Ref: "STG_EHP__STFF"."STF_ID" < "STG_EHP__MEDT"."STF_ID"
+Ref: "STG_EHP__DPMT"."DEP_ID" < "STG_EHP__STFF"."DEP_ID"
+Ref: "STG_EHP__APPT"."REFR_NO" < "STG_EHP__VIST"."REFR_NO"
+Ref: "STG_EHP__VIST"."REFR_NO" < "STG_EHP__DIAG"."REFR_NO"
+Ref: "STG_EHP__VIST"."REFR_NO" < "STG_EHP__TRTM"."REFR_NO"
+Ref: "STG_EHP__MEDT"."MEDT_ID" < "STG_EHP__VIST"."MEDT_ID"
+Ref: "STG_EHP__VIST"."REFR_NO" < "STG_EHP__TMMD"."REFR_NO"
+Ref: "STG_EHP__MDCN"."MED_ID" < "STG_EHP__TMMD"."MED_ID"
+Ref: "STG_EHP__VIST"."REFR_NO" < "STG_EHP__BILL"."REFR_NO"
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__BILL"."PAT_ID"
+Ref: "STG_EHP__DPMT"."DEP_ID" < "STG_EHP__ROMS"."DEP_ID"
+Ref: "STG_EHP__ROMS"."ROM_ID" < "STG_EHP__VIST"."ROM_ID"
+Ref: "STG_EHP__ROMS"."ROM_ID" < "STG_EHP__DIAG"."ROM_ID"
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__INSR"."PAT_ID"
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__MDBL"."PAT_ID"
+Ref: "STG_EHP__VIST"."REFR_NO" < "STG_EHP__MDBL"."REFR_NO"
+Ref: "STG_EHP__MDCN"."MED_ID" < "STG_EHP__INVN"."MAT_SKU"
+Ref: "STG_EHP__EQPM"."EQP_ID" < "STG_EHP__SPLY"."MAT_SKU"
+Ref: "STG_EHP__MDCN"."MED_ID" < "STG_EHP__SPLY"."MAT_SKU"
+Ref: "STG_EHP__PATN"."PAT_ID" < "STG_EHP__PMNT"."PAT_ID"
+Ref: "STG_EHP__BILL"."REFR_NO" < "STG_EHP__PMNT"."REFR_NO"
+Ref: "STG_EHP__SPLY"."SPL_ID" < "STG_EHP__VPMT"."SPL_ID"
+Ref: "STG_EHP__VNDR"."VEN_ACC" < "STG_EHP__SPLY"."VEN_ACC"
+Ref: "STG_EHP__VNDR"."VEN_ACC" < "STG_EHP__VPMT"."VEN_ACC"
