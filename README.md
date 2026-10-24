@@ -1,6 +1,6 @@
 <div align="center">
 
-# Healthcare Industry
+# Healthcare Industry: Capstone Proposal
 
 Business Intelligence
 
@@ -15,15 +15,46 @@ Zantua, Karmen N. <br>
 
 </div>
 
-## **Executive Summary**
+## **Summary**
 
-The proposed business intelligence solution aims to streamline fragmented and inconsistent healthcare data by integrating an interactive BI dashboard with a centralized database, allowing for an efficient and data-driven decision making process for the hospital management and operations. 
-
-Currently, the hospital management has difficulty analyzing the performance of the hospital due to numerous factors such as fragmented data infrastructure, inconsistent data records, duplicate and incomplete patient records, and a lack of a centralized data repository. This leads to a reduction in hospital operational efficiency that further compounds into issues such as long appointment wait times, medication shortages and excess inventory, and inefficient appointment and staff scheduling conflicts.
-
-The proposed BI dashboard's objective is to provide the hospital management with improved real-time operational visibility, continuous monitoring of key performance indicators (KPIs), improved reporting of patient admissions, discharges, and flow, identification of operational bottlenecks, improved financial performance monitoring, and historical trend analysis and demand forecasting. Furthermore, a reworked database will also centralize data management, streamline appointment booking, reduce data redundancy, standardize data formats, and ensure reliable data backup and recovery.
+This project proposes a business intelligence solution that pairs an interactive BI dashboard with a centralized database to give hospital management a clearer, data-driven view of operations. Hospital performance is currently hard to analyze because data is fragmented and inconsistent, patient records are duplicated or incomplete, and no central repository exists. These problems lead to long appointment wait times, medication shortages and excess inventory, and scheduling conflicts. The dashboard will provide real-time operational visibility, continuous KPI monitoring, better reporting on admissions, discharges, and patient flow, bottleneck identification, financial performance tracking, and historical trend analysis with demand forecasting. A reworked database will support it by centralizing data management, streamlining appointment booking, reducing redundancy, standardizing data formats, and ensuring reliable backup and recovery.
 
 ## **Data Source**
+
+The group has chosen the [**Health Care Dataset (20+ Tables)**](https://www.kaggle.com/datasets/moid1234/health-care-data-set-20-tables) from Kaggle as the final dataset for the duration of the capstone. It meets the dataset requirement of having at least 20 interlinked tables while providing a comprehensive relational database for patient, treatment, and hospital management. With over 200+ columns across all tables, the dataset shows promising operational insights for SQL and dashboard creation in healthcare analytics. The dataset includes the following files:
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+  <div>
+
+    1. STG_EHP__DIAG (folder with 2 csv files)
+    2. STG_EHP__INVN (folder with 98 csv files)
+    3. STG_EHP__PMNT (folder with 3 csv files)
+    4. STG_EHP__TMMD (folder with 5 csv files)
+    5. STG_EHP__VPMT (folder with 2 csv files)
+    6. STG_EHP__ALGY.csv
+    7. STG_EHP__APPT.csv
+    8. STG_EHP__BILL.csv
+    9. STG_EHP__DPMT.csv
+    10. STG_EHP__EQPM.csv
+
+  </div>
+  <div>
+
+    11. STG_EHP__INSR.csv
+    12. STG_EHP__MDBL.csv
+    13. STG_EHP__MDCN.csv
+    14. STG_EHP__MEDT.csv
+    15. STG_EHP__PATN.csv
+    16. STG_EHP__PTAL.csv
+    17. STG_EHP__ROMS.csv
+    18. STG_EHP__SPLY.csv
+    19. STG_EHP__STFF.csv
+    20. STG_EHP__TRTM.csv
+    21. STG_EHP__VIST.csv
+    22. STG_EHP__VNDR.csv
+    
+  </div>
+</div>
 
 ## **Problem Statement**
 
@@ -31,7 +62,10 @@ The proposed BI dashboard's objective is to provide the hospital management with
 
 ## **Website**
 
+![homepage]({597590ED-297C-4DDB-ADC6-2E98EBEDA1B9}.png)
+
 ## **Sample Dashboard**
+![dashboard]({27878A49-2039-44A2-9DA4-E3FF3C9D8059}.png)
 
 ## **Solution Architecture**
 
