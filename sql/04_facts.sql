@@ -1,5 +1,5 @@
 USE healthcare;
-
+-- TO BE ADDED: inventory and procurement, all population of data
 -- =============================================
 -- 1. HOSPITAL OPERATIONS
 -- =============================================
@@ -234,10 +234,116 @@ CREATE INDEX fact_treatment_med_ix_5 ON fact_treatment_medicine(visit_ref_no);
 -- =============================================
 
 -- fact_billing
--- Source: stg_billing, stg_medicine_bill
+-- Source: stg_billing
+-- grain: one billing record
+-- Lookup Dimension: Billing Status
+CREATE TABLE dim_billing_status (
+    bill_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    bill_status_code INT NOT NULL,
+    bill_status_desc VARCHAR(100) NOT NULL
+);
+CREATE TABLE fact_billing (
+    bill_key INT AUTO_INCREMENT PRIMARY KEY,
+    patient_key INT NOT NULL, -- Foreign Key
+    bill_date_key INT NOT NULL,
+    bill_status_key INT NOT NULL,
+    -- Degenerate Dimensions
+    bill_ref_no VARCHAR(20) NOT NULL,
+    bill_date DATETIME,
+    bill_amt DECIMAL (10,2),
+    bill_type_code INT, 
+    -- Foreign Keys
+    FOREIGN KEY (patient_key) REFERENCES dim_patient(patient_key),
+    FOREIGN KEY (bill_date_key) REFERENCES dim_date(date_key),
+    FOREIGN KEY (bill_status_key) REFERENCES dim_bill_status(bill_status_key)
+);
+-- Indexes for fact_billing
+CREATE INDEX fact_bill_ix_1 ON fact_billing(patient_key);
+CREATE INDEX fact_bill_ix_2 ON fact_billing(bill_date_key);
+CREATE INDEX fact_bill_ix_3 ON fact_billing(bill_status_key);
+CREATE INDEX fact_billing_ix_4 ON fact_billing(bill_type_code);
+
+-- Lookup Dimension: Medicine Bill Status (if applicable/present)
+CREATE TABLE dim_medbill_status (
+    medbill_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    medbill_status_code INT NOT NULL,
+    medbill_status_desc VARCHAR(100) NOT NULL
+);
+
+-- fact_medbill
+-- Source: stg_medicine_billing
+-- grain: one billing record
+-- Lookup Dimension: Medicine Bill Status
+CREATE TABLE dim_medbill_status (
+    medbill_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    medbill_status_code INT NOT NULL,         -- BSTAT_CD
+    medbill_status_desc VARCHAR(100) NOT NULL  -- BSTAT_DES
+);
+CREATE TABLE fact_medbill (
+    medbill_key INT AUTO_INCREMENT PRIMARY KEY,
+    patient_key INT NOT NULL,                  -- PAT_ID (FK to dim_patient)
+    medbill_date_key INT NOT NULL,             -- BILL_DATE (FK to dim_date)
+    medbill_status_key INT NOT NULL,           -- BSTAT_CD/DES (FK to dim_medbill_status)
+    -- Degenerate Dimensions & Measures
+    medbill_ref_no VARCHAR(20) NOT NULL,       -- REFR_NO
+    medbill_type_code INT,                     -- BTYPE_CD (Degenerate Dimension)
+    medbill_date DATE,                         -- BILL_DATE
+    medbill_amt DECIMAL(10,2),                 -- BILL_AMT
+    -- Foreign Keys
+    FOREIGN KEY (patient_key) REFERENCES dim_patient(patient_key),
+    FOREIGN KEY (medbill_date_key) REFERENCES dim_date(date_key),
+    FOREIGN KEY (medbill_status_key) REFERENCES dim_medbill_status(medbill_status_key)
+);
+-- Indexes for fact_medbill
+CREATE INDEX fact_medbill_ix_1 ON fact_medbill(patient_key);
+CREATE INDEX fact_medbill_ix_2 ON fact_medbill(medbill_date_key);
+CREATE INDEX fact_medbill_ix_3 ON fact_medbill(medbill_status_key);
+CREATE INDEX fact_medbill_ix_4 ON fact_medbill(medbill_ref_no);
+
 
 -- fact_payment
 -- Source: stg_payment
+-- grain: one payment transaction
+-- Lookup Dimension: Payment Method / Mode
+CREATE TABLE dim_payment_method (
+    payment_method_key INT AUTO_INCREMENT PRIMARY KEY,
+    payment_method_code INT NOT NULL,
+    payment_method_desc VARCHAR(100) NOT NULL
+);
+
+-- Lookup Dimension: Payment Status
+CREATE TABLE dim_payment_status (
+    payment_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    payment_status_code INT NOT NULL,
+    payment_status_desc VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE fact_payment (
+    payment_key INT AUTO_INCREMENT PRIMARY KEY,
+    patient_key INT NOT NULL,
+    payment_date_key INT NOT NULL,
+    payment_method_key INT NOT NULL,
+    payment_status_key INT NOT NULL,
+    -- Degenerate Dimensions & Measures
+    bill_ref_no VARCHAR(20) NOT NULL,
+    payment_date DATETIME,
+    payment_amount DECIMAL(10,2),
+    payment_terms INT,
+    payment_seq INT,
+    payment_interface_id VARCHAR(50),
+    -- Foreign Keys
+    FOREIGN KEY (patient_key) REFERENCES dim_patient(patient_key),
+    FOREIGN KEY (payment_date_key) REFERENCES dim_date(date_key),
+    FOREIGN KEY (payment_method_key) REFERENCES dim_payment_method(payment_method_key),
+    FOREIGN KEY (payment_status_key) REFERENCES dim_payment_status(payment_status_key)
+);
+
+-- Indexes for fact_payment
+CREATE INDEX fact_payment_ix_1 ON fact_payment(patient_key);
+CREATE INDEX fact_payment_ix_2 ON fact_payment(payment_date_key);
+CREATE INDEX fact_payment_ix_3 ON fact_payment(payment_method_key);
+CREATE INDEX fact_payment_ix_4 ON fact_payment(payment_status_key);
+CREATE INDEX fact_payment_ix_5 ON fact_payment(bill_ref_no);
 
 
 -- =============================================
