@@ -4,9 +4,9 @@ USE healthcare;
 -- 1. CORE DIMENSIONS
 -- =============================================
 
---
+-- ==========================================================================================
 -- dim_patient
---
+-- ==========================================================================================
 CREATE TABLE IF NOT EXISTS dim_patient (
 	patient_key INT AUTO_INCREMENT PRIMARY KEY,
     patient_id VARCHAR(20) NOT NULL,
@@ -49,9 +49,9 @@ SELECT
     MAR_ST
 FROM stg_patient;
 
---
+-- ==========================================================================================
 -- dim_role
---
+-- ==========================================================================================
 CREATE TABLE IF NOT EXISTS dim_role (
     role_key INT AUTO_INCREMENT PRIMARY KEY,
     role_code INT NOT NULL,
@@ -197,9 +197,9 @@ FROM (
             WHERE b.staff_id IS NULL OR b.staff_key_appointment = -1),
            0
 ) t;
---
+-- ==========================================================================================
 -- dim_department
---
+-- ==========================================================================================
 CREATE TABLE IF NOT EXISTS dim_department(
 	dept_key INT AUTO_INCREMENT PRIMARY KEY,
     dept_id VARCHAR(20) NOT NULL,
@@ -223,9 +223,9 @@ SELECT
     DEP_LOC
 FROM stg_department;
 
---
+-- ==========================================================================================
 -- dim_room
---
+-- ==========================================================================================
 DROP TABLE IF EXISTS dim_room;
 CREATE TABLE IF NOT EXISTS dim_room (
     room_key            INT NOT NULL AUTO_INCREMENT,
@@ -312,8 +312,218 @@ GROUP BY room_id;
 -- 3. BUSINESS DIMENSIONS
 -- =============================================
 
+-- =============================================
+-- dim_medicine_form
+-- =============================================
+CREATE TABLE IF NOT EXISTS dim_medicine_form (
+	form_key INT AUTO_INCREMENT PRIMARY KEY,
+    form_code INT NOT NULL,
+    form_desc VARCHAR(20) NOT NULL
+);
+
+-- Populate table
+INSERT INTO dim_medicine_form (
+	form_code, form_desc
+)
+SELECT 
+	FORM_CD, MAX(FORM_DES)
+FROM stg_medicine
+WHERE FORM_CD IS NOT NULL
+GROUP BY FORM_CD;
+-- =============================================
+-- dim_medicine_status
+-- =============================================
+CREATE TABLE dim_medicine_status (
+    med_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    med_status_desc VARCHAR(50) NOT NULL UNIQUE
+);
+
+INSERT INTO dim_medicine_status (med_status_desc)
+SELECT DISTINCT MSTAT_DES
+FROM stg_medicine
+WHERE MSTAT_DES IS NOT NULL;
+-- =============================================
+-- dim_unit_of_measure
+-- =============================================
+CREATE TABLE IF NOT EXISTS dim_unit_of_measure (
+	unit_key INT AUTO_INCREMENT PRIMARY KEY,
+    unit_code VARCHAR(20) NOT NULL,
+    unit_desc VARCHAR(50)
+);
+
+-- Populate table
+INSERT INTO dim_unit_of_measure (
+    unit_code
+)
+SELECT unit_code
+FROM (
+    SELECT STRN_UN AS unit_code
+    FROM stg_medicine
+
+    UNION
+
+    SELECT FMQTY_UN AS unit_code
+    FROM stg_medicine
+) u
+WHERE unit_code IS NOT NULL;
+
+-- Update unit_desc
+UPDATE dim_unit_of_measure
+SET unit_desc = CASE LOWER(unit_code)
+    WHEN 'mg'      THEN 'Milligram'
+    WHEN 'mcg/puff' THEN 'Microgram per puff'
+    WHEN 'mg/g'    THEN 'Milligram per gram'
+    WHEN 'mg/ml'   THEN 'Milligram per milliliter'
+    WHEN 'ea'      THEN 'Each'
+    WHEN 'puff'    THEN 'Puff'
+    WHEN 'g'       THEN 'Gram'
+    WHEN 'ml'      THEN 'Milliliter'
+    ELSE unit_code
+END
+WHERE unit_key > 0;
+
+-- ==========================================================================================
+-- dim_medicine
+-- ==========================================================================================
+CREATE TABLE IF NOT EXISTS dim_medicine (
+    medicine_key       INT AUTO_INCREMENT PRIMARY KEY,
+    medicine_id        VARCHAR(20) NOT NULL,
+
+    type_code          INT NULL,
+    type_desc          VARCHAR(50) NULL,
+
+    form_key           INT NULL,
+
+    strength_num       DECIMAL(10,3) NULL,
+    strength_unit_key  INT NULL,
+
+    form_qty_num       DECIMAL(10,3) NULL,
+    form_qty_unit_key  INT NULL,
+
+    med_status_key     INT NULL,
+
+    storage_desc       VARCHAR(100) NULL,
+    expiration_months  INT NULL,
+    units_per_case     INT NULL,
+    unit_cost          DECIMAL(12,2) NULL,
+
+    FOREIGN KEY (form_key)
+        REFERENCES dim_medicine_form(form_key),
+
+    FOREIGN KEY (strength_unit_key)
+        REFERENCES dim_unit_of_measure(unit_key),
+
+    FOREIGN KEY (form_qty_unit_key)
+        REFERENCES dim_unit_of_measure(unit_key),
+
+    FOREIGN KEY (med_status_key)
+        REFERENCES dim_medicine_status(med_status_key)
+);
+
+-- Populate the table
+INSERT INTO dim_medicine (
+    medicine_id,
+    type_code,
+    type_desc,
+    form_key,
+    strength_num,
+    strength_unit_key,
+    form_qty_num,
+    form_qty_unit_key,
+    med_status_key,
+    storage_desc,
+    expiration_months,
+    units_per_case,
+    unit_cost
+)
+SELECT
+    m.MED_ID,
+    m.TYPE_CD,
+    m.TYPE_DES,
+    f.form_key,
+    m.STRN_NO,
+    su.unit_key,
+    m.FMQTY_NO,
+    fu.unit_key,
+    ms.med_status_key,
+    m.STRG_DES,
+    m.EXP_MON,
+    m.UN_P_CS,
+    m.COST_UN
+FROM stg_medicine m
+LEFT JOIN dim_medicine_form f
+    ON m.FORM_CD = f.form_code
+LEFT JOIN dim_unit_of_measure su
+    ON m.STRN_UN = su.unit_code
+LEFT JOIN dim_unit_of_measure fu
+    ON m.FMQTY_UN = fu.unit_code
+LEFT JOIN dim_medicine_status ms
+    ON m.MSTAT_DES = ms.med_status_desc;
+
+-- dim_equipment_type
+CREATE TABLE IF NOT EXISTS dim_equipment_type (
+	type_key INT AUTO_INCREMENT PRIMARY KEY,
+    type_code INT NOT NULL,
+    type_desc VARCHAR(30) NOT NULL
+);
+
+INSERT INTO dim_equipment_type(
+	type_code, type_desc
+)
+SELECT DISTINCT
+	TYPE_CD, TYPE_DES
+FROM stg_equipment;
+
+-- dim_equipment_cat_1
+CREATE TABLE IF NOT EXISTS dim_equipment_cat_1 (
+	eqp_cat_1_key INT AUTO_INCREMENT PRIMARY KEY,
+    eqp_cat_1_desc VARCHAR(30) NOT NULL
+);
+
+INSERT INTO dim_equipment_cat_1(eqp_cat_1_desc)
+SELECT DISTINCT
+	EQP_CAT__1
+FROM stg_equipment;
+
+-- dim_equipment_cat_2
+CREATE TABLE IF NOT EXISTS dim_equipment_cat_2 (
+	eqp_cat_2_key INT AUTO_INCREMENT PRIMARY KEY,
+    eqp_cat_2_desc VARCHAR(30) NOT NULL
+);
+
+INSERT INTO dim_equipment_cat_2(eqp_cat_2_desc)
+SELECT DISTINCT
+	EQP_CAT__2
+FROM stg_equipment;
+
+-- dim_equipment_cat_3
+CREATE TABLE IF NOT EXISTS dim_equipment_cat_3 (
+	eqp_cat_3_key INT AUTO_INCREMENT PRIMARY KEY,
+    eqp_cat_3_desc VARCHAR(30)
+);
+
+INSERT INTO dim_equipment_cat_3(eqp_cat_3_desc)
+SELECT DISTINCT
+	EQP_CAT__3
+FROM stg_equipment;
+
+-- dim_equipment_storage
+
+-- dim_equipment_status
+
+-- =============================================
+-- dim_equipment
+-- =============================================
+CREATE TABLE IF NOT EXISTS dim_equipment (
+	eqp_key INT AUTO_INCREMENT PRIMARY KEY,
+    eqp_name VARCHAR(30),
+    modl_no,
+);
 -- dim_vendor
 -- dim_insurance
+-- dim_diagnosis
+-- dim_treatment
+-- dim_date
 -- dim_medical_team
 -- dim_inventory_item
 
