@@ -1,0 +1,199 @@
+name: Deploy paid site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: paid-site-kchospital
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      deploy: ${{ steps.detect.outputs.deploy }}
+      artifact_key: ${{ steps.package.outputs.artifact_key }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+
+      - name: Detect committed static site or build script
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch deploy/build.sh >/dev/null 2>&1; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif git ls-files --error-unmatch deploy/site/index.html >/dev/null 2>&1; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo 'Deployment skipped. No committed static site or build script.' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run committed static build script
+        if: steps.detect.outputs.build == 'true'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ''
+          AWS_SECRET_ACCESS_KEY: ''
+          AWS_SESSION_TOKEN: ''
+          AWS_WEB_IDENTITY_TOKEN_FILE: ''
+        run: |
+          set -euo pipefail
+          test -f deploy/build.sh
+          bash deploy/build.sh
+          test -f deploy/site/index.html
+
+      - name: Package bounded static artifact
+        id: package
+        if: steps.detect.outputs.deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/package_site.py" \
+            --slug 'kchospital' --repository-id '1425166838' \
+            --revision "$GITHUB_SHA" --ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --out artifact/site.tar.gz
+          sha="$(sha256sum artifact/site.tar.gz | cut -d ' ' -f 1)"
+          key="paid-sites/kchospital/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Pass package to isolated deploy job
+        if: steps.detect.outputs.deploy == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: paid-site-package-${{ github.run_attempt }}
+          path: artifact/site.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    needs: package
+    if: needs.package.outputs.deploy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Download package from isolated build job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: paid-site-package-${{ github.run_attempt }}
+          path: artifact
+
+      - name: Validate package digest
+        env:
+          EXPECTED_SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  %s\n' "$EXPECTED_SHA256" artifact/site.tar.gz | sha256sum --check --status
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::173677044880:role/ust-paid-kchospital-github
+          aws-region: us-east-1
+          allowed-account-ids: '173677044880'
+          role-session-name: paid-site-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Create immutable artifact object
+        env:
+          AWS_REGION: us-east-1
+          RELEASE_BUCKET: msi-ust-paid-sites-173677044880-us-east-1
+          ARTIFACT_KEY: ${{ needs.package.outputs.artifact_key }}
+          EXPECTED_SHA256: ${{ needs.package.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum artifact/site.tar.gz | cut -d ' ' -f 1)"
+          [[ "$actual" == "$EXPECTED_SHA256" ]]
+          digest_b64="$(printf '%s' "$actual" | xxd -r -p | base64 -w0)"
+          aws s3api put-object --region "$AWS_REGION" --if-none-match '*' \
+            --bucket "$RELEASE_BUCKET" --key "$ARTIFACT_KEY" \
+            --body artifact/site.tar.gz --checksum-algorithm SHA256 \
+            --checksum-sha256 "$digest_b64" >/dev/null
+
+      - name: Start deployment via SSM
+        id: ssm
+        env:
+          AWS_REGION: us-east-1
+          INSTANCE_ID: i-068efaae507c5294d
+          DOCUMENT_NAME: UST-Paid-kchospital-DeployProduction
+          ARTIFACT_KEY: ${{ needs.package.outputs.artifact_key }}
+          EXPECTED_SHA256: ${{ needs.package.outputs.sha256 }}
+          REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)"
+          if [[ "$head_sha" != "$REVISION" ]]; then
+            echo 'Deployment skipped. The packaged revision is no longer the head of main.' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          command_id="$(aws ssm send-command --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" --document-name "$DOCUMENT_NAME" \
+            --parameters "ArtifactKey=$ARTIFACT_KEY,Sha256=$EXPECTED_SHA256,Revision=$REVISION,RunId=$RUN_ID,RunAttempt=$RUN_ATTEMPT" \
+            --timeout-seconds 600 \
+            --query 'Command.CommandId' --output text)"
+          [[ "$command_id" =~ ^[0-9a-f-]{36}$ ]]
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+          echo "SSM command $command_id submitted." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Poll SSM command with bounded deadline
+        if: steps.ssm.outputs.command_id != ''
+        env:
+          AWS_REGION: us-east-1
+          INSTANCE_ID: i-068efaae507c5294d
+          COMMAND_ID: ${{ steps.ssm.outputs.command_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 900))
+          while (( SECONDS < deadline )); do
+            if ! result="$(aws ssm get-command-invocation --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --output json 2>&1)"; then
+              case "$result" in
+                *InvocationDoesNotExist*|*Throttl*|*ServiceUnavailable*) sleep 10; continue ;;
+                *) echo 'SSM status lookup failed.' | tee -a "$GITHUB_STEP_SUMMARY"; exit 1 ;;
+              esac
+            fi
+            status="$(jq -r '.Status' <<<"$result")"
+            phase="$(jq -r '[.StandardOutputContent // "" | split("\n")[] | select(test("^DEPLOY_STATUS (activated|already-active|stale|failed-(preflight|download|validation|health|activation))$"))] | last // ""' <<<"$result")"
+            case "$status" in
+              Success)
+                case "$phase" in
+                  'DEPLOY_STATUS activated'|'DEPLOY_STATUS already-active'|'DEPLOY_STATUS stale')
+                    echo "$phase" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+                  *) echo 'SSM completed without a verified release status.' | tee -a "$GITHUB_STEP_SUMMARY"; exit 1 ;;
+                esac
+                ;;
+              Failed|Cancelled|TimedOut|Undeliverable|Terminated)
+                echo "SSM deployment ended with status $status. $phase" | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "SSM polling deadline reached. Check command $COMMAND_ID before retrying." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
