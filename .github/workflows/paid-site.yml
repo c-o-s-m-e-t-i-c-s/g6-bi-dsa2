@@ -12,6 +12,74 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-migrations:
+    needs: package
+    if: needs.package.outputs.migrations == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: migration_test
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          persist-credentials: false
+      - name: Validate and execute migration pairs on MySQL 8.4
+        shell: bash
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('deploy/migrations')
+          files = sorted(p.name for p in root.iterdir()) if root.exists() else []
+          if not files:
+              raise SystemExit('No migration inputs found for validation job')
+          pattern = re.compile(r'([0-9]{4})_([a-z][a-z0-9_]{0,59})\.(sql|verify\.sql)')
+          pairs = {}
+          for name in files:
+              match = pattern.fullmatch(name)
+              if not match or match.group(1) == '0000':
+                  raise SystemExit(f'Invalid migration filename: {name}')
+              number, _, kind = match.groups()
+              pair = pairs.setdefault(number, set())
+              key = 'verify' if kind == 'verify.sql' else 'up'
+              if key in pair:
+                  raise SystemExit(f'Duplicate migration number: {number}')
+              pair.add(key)
+          if any(pair != {'up', 'verify'} for pair in pairs.values()):
+              raise SystemExit('Every migration requires matching .sql and .verify.sql files')
+          if [int(number) for number in sorted(pairs)] != list(range(1, len(pairs) + 1)):
+              raise SystemExit('Migration numbers must be contiguous from 0001')
+          if len(files) > 100 or sum((root / name).stat().st_size for name in files) > 16 * 1024 * 1024:
+              raise SystemExit('Migration input limits exceeded')
+          for name in files:
+              data = (root / name).read_bytes()
+              if not data.endswith(b'\n') or len(data) > 256 * 1024 or b'\r' in data or b'\x00' in data:
+                  raise SystemExit(f'Migration must be <=256 KiB and use LF: {name}')
+              data.decode('utf-8', errors='strict')
+          PY
+          docker exec -e MYSQL_PWD=ci-root-password "$MYSQL_CONTAINER" mysql -uroot \
+            -e "CREATE USER 'migration_ci'@'localhost' IDENTIFIED BY 'ci-migration-password'; GRANT SELECT, INSERT, CREATE, ALTER, INDEX, REFERENCES, SHOW VIEW, TRIGGER ON \`migration\\_test\`.* TO 'migration_ci'@'localhost';"
+          mysql_ci=(docker exec -i -e MYSQL_PWD=ci-migration-password "$MYSQL_CONTAINER" mysql --binary-mode --local-infile=0 --batch --raw --skip-column-names -umigration_ci migration_test)
+          for file in deploy/migrations/*.sql; do
+            [[ "$file" == *.verify.sql ]] && continue
+            "${mysql_ci[@]}" < "$file"
+            result="$("${mysql_ci[@]}" < "${file%.sql}.verify.sql")"
+            if [[ "$result" != 1 ]]; then echo "Migration verification failed for $file"; exit 1; fi
+          done
+
   package:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -20,6 +88,8 @@ jobs:
       contents: read
     outputs:
       deploy: ${{ steps.detect.outputs.deploy }}
+      build: ${{ steps.detect.outputs.build }}
+      migrations: ${{ steps.detect.outputs.migrations }}
       artifact_key: ${{ steps.package.outputs.artifact_key }}
       sha256: ${{ steps.package.outputs.sha256 }}
     steps:
@@ -28,23 +98,36 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect committed static site or build script
+      - name: Detect committed site or migration inputs
         id: detect
         shell: bash
         run: |
           set -euo pipefail
+          site=false
+          build=false
+          migrations=false
           if git ls-files --error-unmatch deploy/build.sh >/dev/null 2>&1; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-            echo "build=true" >> "$GITHUB_OUTPUT"
+            site=true
+            build=true
           elif git ls-files --error-unmatch deploy/site/index.html >/dev/null 2>&1; then
+            site=true
+          fi
+          if git ls-files --error-unmatch ':(glob)deploy/migrations/**' >/dev/null 2>&1; then
+            migrations=true
+          fi
+          printf 'build=%s\nmigrations=%s\n' "$build" "$migrations" >> "$GITHUB_OUTPUT"
+          if [[ "$migrations" == false ]]; then
+            echo 'MySQL migration skipped. No committed migration files.' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ "$site" == true || "$migrations" == true ]]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo 'Deployment skipped. No committed static site or build script.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo 'Deployment skipped. No committed site or migrations.' | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Run committed static build script
-        if: steps.detect.outputs.build == 'true'
+        if: steps.detect.outputs.build == 'true' && steps.detect.outputs.deploy == 'true'
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ''
@@ -83,8 +166,8 @@ jobs:
           retention-days: 1
 
   deploy:
-    needs: package
-    if: needs.package.outputs.deploy == 'true'
+    needs: [package, validate-migrations]
+    if: ${{ !cancelled() && needs.package.result == 'success' && needs.package.outputs.deploy == 'true' && ((needs.package.outputs.migrations == 'true' && needs.validate-migrations.result == 'success') || (needs.package.outputs.migrations == 'false' && needs.validate-migrations.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -179,11 +262,13 @@ jobs:
               esac
             fi
             status="$(jq -r '.Status' <<<"$result")"
-            phase="$(jq -r '[.StandardOutputContent // "" | split("\n")[] | select(test("^DEPLOY_STATUS (activated|already-active|stale|failed-(preflight|download|validation|health|activation))$"))] | last // ""' <<<"$result")"
+            phase="$(jq -r '[.StandardOutputContent // "" | split("\n")[] | select(test("^DEPLOY_STATUS (activated|already-active|stale|migration-only|failed-(preflight|download|validation|health|activation|migrations))$"))] | last // ""' <<<"$result")"
+            migration="$(jq -r '[.StandardOutputContent // "" | split("\n")[] | select(test("^MIGRATION_STATUS (skipped|unchanged|applied)$"))] | last // ""' <<<"$result")"
+            if [[ -n "$migration" ]]; then echo "$migration" | tee -a "$GITHUB_STEP_SUMMARY"; fi
             case "$status" in
               Success)
                 case "$phase" in
-                  'DEPLOY_STATUS activated'|'DEPLOY_STATUS already-active'|'DEPLOY_STATUS stale')
+                  'DEPLOY_STATUS activated'|'DEPLOY_STATUS already-active'|'DEPLOY_STATUS stale'|'DEPLOY_STATUS migration-only')
                     echo "$phase" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0 ;;
                   *) echo 'SSM completed without a verified release status.' | tee -a "$GITHUB_STEP_SUMMARY"; exit 1 ;;
                 esac

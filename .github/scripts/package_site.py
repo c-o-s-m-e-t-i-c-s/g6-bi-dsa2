@@ -11,6 +11,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import subprocess
 import tarfile
 import tempfile
 
@@ -25,6 +26,9 @@ MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
 MAX_FILES = 5000
 ASSET_PATH = re.compile(r"site/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*")
+MIGRATION_NAME = re.compile(r"([0-9]{4})_([a-z][a-z0-9_]{0,59})\.(sql|verify\.sql)")
+MAX_MIGRATION_FILE = 256 * 1024
+MAX_MIGRATIONS_TOTAL = 16 * 1024 * 1024
 
 
 def fail(message: str) -> None:
@@ -52,13 +56,18 @@ def main() -> None:
 
     root = Path(a.root).resolve()
     site = root / "deploy" / "site"
-    if not site.is_dir() or not (site / "index.html").is_file():
-        fail("deploy/site/index.html is required")
-    if not stat.S_ISDIR((root / "deploy").lstat().st_mode) or not stat.S_ISDIR(site.lstat().st_mode):
-        fail("deploy and deploy/site must be regular directories")
     files: list[tuple[Path, str, int]] = []
     expanded = 0
-    for base, dirs, names in os.walk(site, followlinks=False):
+    has_site = site.is_dir() and (site / "index.html").is_file()
+    deploy_dir = root / "deploy"
+    if not deploy_dir.is_dir() or not stat.S_ISDIR(deploy_dir.lstat().st_mode):
+        fail("deploy must be a regular directory")
+    if site.exists() and (not stat.S_ISDIR(site.lstat().st_mode) or not has_site):
+        fail("deploy/site/index.html is required when deploy/site exists")
+    if has_site and not stat.S_ISDIR(site.lstat().st_mode):
+        fail("deploy/site must be a regular directory")
+    if has_site:
+      for base, dirs, names in os.walk(site, followlinks=False):
         base_path = Path(base)
         # Exclude every dot directory, and reject symlinks/special files rather than following them.
         visible_dirs = []
@@ -87,12 +96,78 @@ def main() -> None:
                 fail(f"invalid asset path: {rel}")
             files.append((src, rel, st.st_size))
             expanded += st.st_size
-    if len(files) == 0 or len(files) > MAX_FILES:
+        if len(files) > MAX_FILES:
+            fail(f"file count must not exceed {MAX_FILES}")
+    if len(files) > MAX_FILES:
         fail(f"file count must be between 1 and {MAX_FILES}")
     if expanded > MAX_EXPANDED:
         fail("expanded site exceeds 128 MiB")
-    if not any(rel == "index.html" and size > 0 for _, rel, size in files):
+    if has_site and not any(rel == "index.html" and size > 0 for _, rel, size in files):
         fail("index.html must be a non-empty regular file at the site root")
+
+    # Package only committed migration blobs. This prevents a build script from
+    # creating or rewriting deployment input after checkout.
+    migrations_dir = deploy_dir / "migrations"
+    migrations: list[tuple[str, bytes]] = []
+    committed_paths = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", a.revision, "--", "deploy/migrations"],
+        cwd=root, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    committed_names = sorted(Path(path).name for path in committed_paths)
+    if migrations_dir.exists():
+        if not stat.S_ISDIR(migrations_dir.lstat().st_mode):
+            fail("deploy/migrations must be a regular directory")
+        names = sorted(p.name for p in migrations_dir.iterdir())
+        if names != committed_names:
+            fail("migration input inventory differs from the packaged commit")
+        parsed: dict[str, dict[str, str]] = {}
+        for name in names:
+            m = MIGRATION_NAME.fullmatch(name)
+            if not m:
+                fail(f"invalid migration filename: {name}")
+            number, _, kind = m.groups()
+            if number == "0000":
+                fail("migration number must be nonzero")
+            entry = parsed.setdefault(number, {})
+            key = "verify" if kind == "verify.sql" else "up"
+            if key in entry:
+                fail(f"duplicate migration number: {number}")
+            entry[key] = name
+        if not parsed and names:
+            fail("deploy/migrations directory must contain migration files")
+        for number, pair in parsed.items():
+            if set(pair) != {"up", "verify"}:
+                fail(f"migration {number} must have both .sql and .verify.sql files")
+        if len(names) > 100:
+            fail("migration file count exceeds 100")
+        total = 0
+        for name in names:
+            path = migrations_dir / name
+            if not stat.S_ISREG(path.lstat().st_mode):
+                fail(f"migration must be a regular file: {name}")
+            data = path.read_bytes()
+            if len(data) > MAX_MIGRATION_FILE:
+                fail(f"migration exceeds 1 MiB: {name}")
+            total += len(data)
+            try:
+                data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                fail(f"migration must be UTF-8: {name}")
+            if b"\r" in data:
+                fail(f"migration must use LF line endings: {name}")
+            tracked = subprocess.run(["git", "ls-tree", "-r", "--name-only", a.revision, "--", f"deploy/migrations/{name}"], cwd=root, check=True, capture_output=True, text=True).stdout.splitlines()
+            if tracked != [f"deploy/migrations/{name}"]:
+                fail(f"migration is not present in the packaged commit: {name}")
+            committed = subprocess.run(["git", "show", f"{a.revision}:deploy/migrations/{name}"], cwd=root, check=True, capture_output=True).stdout
+            if committed != data:
+                fail(f"migration bytes differ from the packaged commit: {name}")
+            migrations.append((name, data))
+        if total > MAX_MIGRATIONS_TOTAL:
+            fail("migrations exceed 16 MiB expanded")
+    elif committed_names:
+        fail("committed migration inputs are missing from the worktree")
+    if not files and not migrations:
+        fail("neither a static site nor recognized migrations are present")
 
     manifest = {
         "format": 1,
@@ -103,6 +178,8 @@ def main() -> None:
         "run_id": str(a.run_id),
         "run_attempt": str(a.run_attempt),
     }
+    if migrations:
+        manifest["migration_files"] = {name: hashlib.sha256(data).hexdigest() for name, data in migrations}
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=out.parent, suffix=".tar.gz", delete=False) as tmp:
@@ -118,6 +195,10 @@ def main() -> None:
                 info.size, info.mode, info.mtime = size, 0o644, 0
                 with src.open("rb") as f:
                     tf.addfile(info, f)
+            for name, data in migrations:
+                info = tarfile.TarInfo(f"migrations/{name}")
+                info.size, info.mode, info.mtime = len(data), 0o644, 0
+                tf.addfile(info, io.BytesIO(data))
         if Path(temp_name).stat().st_size > MAX_ARCHIVE:
             fail("compressed archive exceeds 64 MiB")
         with gzip.open(temp_name, "rb") as archive:
