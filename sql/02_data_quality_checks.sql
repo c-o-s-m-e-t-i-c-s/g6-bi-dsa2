@@ -66,7 +66,7 @@ JOIN actual_database_counts a ON e.table_name = a.table_name
 ORDER BY e.table_name;
 
 -- B. NULL VALUES
--- 1. Patient Table (stg_patient)
+-- 1. Patient Table (stg_patient) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(PAT_ID IS NULL) AS null_PAT_ID,
@@ -92,7 +92,7 @@ SELECT
 FROM healthcare.stg_patient;
 
 
--- 2. Allergy Table (stg_allergy)
+-- 2. Allergy Table (stg_allergy) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(ALG_ID IS NULL) AS null_ALG_ID,
@@ -101,7 +101,7 @@ SELECT
 FROM healthcare.stg_allergy;
 
 
--- 3. Appointment Table (stg_appointment)
+-- 3. Appointment Table (stg_appointment) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -117,7 +117,7 @@ SELECT
 FROM healthcare.stg_appointment;
 
 
--- 4. Bill Table (stg_billing)
+-- 4. Bill Table (stg_billing) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -131,7 +131,7 @@ SELECT
 FROM healthcare.stg_billing;
 
 
--- 5. Diagnosis Table (stg_diagnosis)
+-- 5. Diagnosis Table (stg_diagnosis) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -149,7 +149,7 @@ SELECT
 FROM healthcare.stg_diagnosis;
 
 
--- 6. Department Table (stg_department)
+-- 6. Department Table (stg_department) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(DEP_ID IS NULL) AS null_DEP_ID,
@@ -160,7 +160,7 @@ SELECT
 FROM healthcare.stg_department;
 
 
--- 7. Equipment Table (stg_equipment), 338 nulls
+-- 7. Equipment Table (stg_equipment) - FAIL, null_EQP_CAT__3 - 338 nulls
 SELECT 
     COUNT(*) AS total_rows,
     SUM(EQP_ID IS NULL) AS null_EQP_ID,
@@ -178,7 +178,7 @@ SELECT
 FROM healthcare.stg_equipment;
 
 
--- 8. Insurance Table (stg_insurance)
+-- 8. Insurance Table (stg_insurance) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(POL_NO IS NULL) AS null_POL_NO,
@@ -195,7 +195,7 @@ SELECT
 FROM healthcare.stg_insurance;
 
 
--- 9. Medicine Bill Table (stg_medicine_bill)
+-- 9. Medicine Bill Table (stg_medicine_bill) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -209,7 +209,7 @@ SELECT
 FROM healthcare.stg_medicine_bill;
 
 
--- 10. Medicine Table (stg_medicine)
+-- 10. Medicine Table (stg_medicine) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(MED_ID IS NULL) AS null_MED_ID,
@@ -233,7 +233,7 @@ SELECT
 FROM healthcare.stg_medicine;
 
 
--- 11. Medical Team Table (stg_medical_team)
+-- 11. Medical Team Table (stg_medical_team) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(MEDT_ID IS NULL) AS null_MEDT_ID,
@@ -245,7 +245,7 @@ SELECT
 FROM healthcare.stg_medical_team;
 
 
--- 12. Payment Table (stg_payment)
+-- 12. Payment Table (stg_payment) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -265,7 +265,7 @@ SELECT
 FROM healthcare.stg_payment;
 
 
--- 13. Patient Allergy Table (stg_patient_allergy)
+-- 13. Patient Allergy Table (stg_patient_allergy) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(PAT_ID IS NULL) AS null_PAT_ID,
@@ -278,7 +278,7 @@ SELECT
 FROM healthcare.stg_patient_allergy;
 
 
--- 14. Rooms Table (stg_rooms)
+-- 14. Rooms Table (stg_rooms) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(ROM_ID IS NULL) AS null_ROM_ID,
@@ -292,7 +292,7 @@ SELECT
 FROM healthcare.stg_rooms;
 
 
--- 15. Supply Table (stg_supply)
+-- 15. Supply Table (stg_supply) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(SPL_ID IS NULL) AS null_SPL_ID,
@@ -315,9 +315,9 @@ SELECT
 FROM healthcare.stg_supply;
 
 
--- 16. Staff Table (stg_staff)
+-- 16. Staff Table (stg_staff) - PASS
 SELECT 
-    COUNT(*) AS total_rows,
+    COUNT(*) AS total_rows,	
     SUM(STF_ID IS NULL) AS null_STF_ID,
     SUM(F_NAME IS NULL) AS null_F_NAME,
     SUM(L_NAME IS NULL) AS null_L_NAME,
@@ -341,7 +341,7 @@ SELECT
 FROM healthcare.stg_staff;
 
 
--- 17. Medicine Used in Treatment Table (stg_treatment_med)
+-- 17. Medicine Used in Treatment Table (stg_treatment_med) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -360,7 +360,7 @@ SELECT
 FROM healthcare.stg_treatment_med;
 
 
--- 18. Treatment Table (stg_treatment)
+-- 18. Treatment Table (stg_treatment) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -377,7 +377,7 @@ SELECT
 FROM healthcare.stg_treatment;
 
 
--- 19. Visits Table (stg_visit)
+-- 19. Visits Table (stg_visit) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -394,7 +394,7 @@ SELECT
 FROM healthcare.stg_visit;
 
 
--- 20. Vendor Table (stg_vendor)
+-- 20. Vendor Table (stg_vendor) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(VEN_ACC IS NULL) AS null_VEN_ACC,
@@ -411,7 +411,7 @@ SELECT
 FROM healthcare.stg_vendor;
 
 
--- 21. Vendor Payment Table (stg_vendor_payment)
+-- 21. Vendor Payment Table (stg_vendor_payment) - PASS
 SELECT 
     COUNT(*) AS total_rows,
     SUM(REFR_NO IS NULL) AS null_REFR_NO,
@@ -432,8 +432,7 @@ FROM healthcare.stg_vendor_payment;
 
 
 -- 22. Inventory Table (stg_inventory)
--- Error Code: Lost Connection to MySQL server during query (doesn't work)
--- Batch 1: Series 1 (~14 Million Rows)
+-- Batch 1: Series 1 (~14 Million Rows) - PASS
 SELECT 
     'INVN Series 1' AS batch_name,
     COUNT(*) AS total_rows,
@@ -453,7 +452,7 @@ FROM healthcare.stg_inventory
 WHERE src_file LIKE 'STG_EHP__INVN_1_%';
 
 
--- Batch 2: Series 2 (~14 Million Rows)
+-- Batch 2: Series 2 (~14 Million Rows) - PASS
 SELECT 
     'INVN Series 2' AS batch_name,
     COUNT(*) AS total_rows,
@@ -473,8 +472,8 @@ FROM healthcare.stg_inventory
 WHERE src_file LIKE 'STG_EHP__INVN_2_%';
 
 
--- Batch 3: Series 3 (~14 Million Rows)
-SELECT 
+-- Batch 3: Series 3 (~14 Million Rows) - PASS
+SELECT 	
     'INVN Series 3' AS batch_name,
     COUNT(*) AS total_rows,
     SUM(MAT_SKU IS NULL) AS null_MAT_SKU,
@@ -493,7 +492,7 @@ FROM healthcare.stg_inventory
 WHERE src_file LIKE 'STG_EHP__INVN_3_%';
 
 
--- Batch 4: Series 4 (~14 Million Rows)
+-- Batch 4: Series 4 (~14 Million Rows) - PASS
 SELECT 
     'INVN Series 4' AS batch_name,
     COUNT(*) AS total_rows,
@@ -513,7 +512,7 @@ FROM healthcare.stg_inventory
 WHERE src_file LIKE 'STG_EHP__INVN_4_%';
 
 
--- Batch 5: Series 5 (~17 Million Rows)
+-- Batch 5: Series 5 (~17 Million Rows) - PASS
 SELECT 
     'INVN Series 5' AS batch_name,
     COUNT(*) AS total_rows,
@@ -533,7 +532,7 @@ FROM healthcare.stg_inventory
 WHERE src_file LIKE 'STG_EHP__INVN_5_%';
 
 
--- Batch 6: Series 6 (~17 Million Rows)
+-- Batch 6: Series 6 (~17 Million Rows) - Pass
 SELECT 
     'INVN Series 6' AS batch_name,
     COUNT(*) AS total_rows,
@@ -688,3 +687,90 @@ SELECT MAT_SKU, INGTN_TS, COUNT(*) AS dup_count -- lost connection error
 FROM stg_inventory
 GROUP BY MAT_SKU, INGTN_TS
 HAVING COUNT(*) > 1;
+
+-- stg_staff has duplicate rows (!!)
+-- ISSUE: stg_staff.STF_ID is not unique per person
+	-- 5496 duplicate rows, 5411 distinct STF_ID
+	-- 83 STF_IDs are shared by different people with different names and roles
+	-- 81 IDs have 2 rows, 2 IDs have 3 rows
+	-- 74/83 shared IDs have no 'Doctor' candidate, 9 have exactly one Doctor candidate
+-- WHY IT LIKELY HAPPENED: dataset is synthetic and has no documentation of its own
+	-- likely what happened was IDs were assigned at random without a uniqueness check
+	-- another likely reason is that staff files from different generation batches or sources were merged leading to duplicate batch issued IDs
+	-- a less likely cause is that IDs were recycled after staff left,
+    
+-- 0a. Staging column types (for reference; tighten target types from this) 
+SELECT COLUMN_NAME, COLUMN_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'healthcare' AND TABLE_NAME = 'stg_staff'
+ORDER BY ORDINAL_POSITION;
+ 
+-- 0b. Source quality - PASS
+SELECT 'stg_staff has rows' AS check_name,
+       COUNT(*) AS found,
+       IF(COUNT(*) > 0, 'PASS', 'FAIL') AS result
+FROM stg_staff
+UNION ALL
+SELECT 'no NULL STF_ID',
+       COALESCE(SUM(STF_ID IS NULL), 0),
+       IF(COALESCE(SUM(STF_ID IS NULL), 0) = 0, 'PASS', 'FAIL')
+FROM stg_staff
+UNION ALL
+SELECT 'STF_ID + HIRE_DATE unique (grain of dim_staff)',
+       COUNT(*),
+       IF(COUNT(*) = 0, 'PASS', 'FAIL')
+FROM (SELECT 1 FROM stg_staff
+      GROUP BY STF_ID, HIRE_DATE HAVING COUNT(*) > 1) d
+UNION ALL
+SELECT 'same person repeated under one STF_ID (would get 2 keys)',
+       COUNT(*),
+       IF(COUNT(*) = 0, 'PASS', 'REVIEW')
+FROM (SELECT 1 FROM stg_staff
+      GROUP BY STF_ID, F_NAME, L_NAME, DT_BRT HAVING COUNT(*) > 1) d;
+ 
+-- 0c. Does the data fit the target types? found must be <= allowed. - PASS, except DT_BRT, HIRE_DATE, ROLE_DATE
+--     Length rows compare the longest value to the column size. Date rows
+--     count values that are not in YYYY-MM-DD form (expect 0). If a date
+--     column uses another format, change the INSERT in STEP 2 to
+--     STR_TO_DATE(col, '<format>') and this check to match.
+SELECT check_name, found, allowed,
+       IF(COALESCE(found, 0) <= allowed, 'PASS', 'FAIL') AS result
+FROM (
+    SELECT 'STF_ID length (staff_id VARCHAR(20))' AS check_name,
+           MAX(CHAR_LENGTH(STF_ID)) AS found, 20 AS allowed FROM stg_staff
+    UNION ALL SELECT 'F_NAME length (first_name VARCHAR(50))',
+           MAX(CHAR_LENGTH(F_NAME)), 50 FROM stg_staff
+    UNION ALL SELECT 'M_NAME length (middle_name VARCHAR(50))',
+           MAX(CHAR_LENGTH(M_NAME)), 50 FROM stg_staff
+    UNION ALL SELECT 'L_NAME length (last_name VARCHAR(50))',
+           MAX(CHAR_LENGTH(L_NAME)), 50 FROM stg_staff
+    UNION ALL SELECT 'GEN_CD length (gender_code VARCHAR(10))',
+           MAX(CHAR_LENGTH(GEN_CD)), 10 FROM stg_staff
+    UNION ALL SELECT 'GEN_DES length (gender_desc VARCHAR(30))',
+           MAX(CHAR_LENGTH(GEN_DES)), 30 FROM stg_staff
+    UNION ALL SELECT 'DEP_ID length (dept_id VARCHAR(10))',
+           MAX(CHAR_LENGTH(DEP_ID)), 10 FROM stg_staff
+    UNION ALL SELECT 'ROLE_CD length (role_code VARCHAR(10))',
+           MAX(CHAR_LENGTH(ROLE_CD)), 10 FROM stg_staff
+    UNION ALL SELECT 'ROLE_DES length (role_desc VARCHAR(50))',
+           MAX(CHAR_LENGTH(ROLE_DES)), 50 FROM stg_staff
+    UNION ALL SELECT 'STAT_CD length (stat_code VARCHAR(10))',
+           MAX(CHAR_LENGTH(STAT_CD)), 10 FROM stg_staff
+    UNION ALL SELECT 'STAT_DES length (stat_desc VARCHAR(30))',
+           MAX(CHAR_LENGTH(STAT_DES)), 30 FROM stg_staff
+    UNION ALL SELECT 'DT_BRT not a valid date (date_of_birth)',
+           COUNT(*), 0 FROM stg_staff
+           WHERE DT_BRT IS NOT NULL AND STR_TO_DATE(DT_BRT, '%Y-%m-%d') IS NULL
+    UNION ALL SELECT 'HIRE_DATE not a valid date (hire_date)',
+           COUNT(*), 0 FROM stg_staff
+           WHERE HIRE_DATE IS NOT NULL AND STR_TO_DATE(HIRE_DATE, '%Y-%m-%d') IS NULL
+    UNION ALL SELECT 'ROLE_DATE not a valid date (role_date)',
+           COUNT(*), 0 FROM stg_staff
+           WHERE ROLE_DATE IS NOT NULL AND STR_TO_DATE(ROLE_DATE, '%Y-%m-%d') IS NULL
+) t;
+ 
+-- 0d. Strict mode makes MySQL stop with an error instead of silently - PASS
+--     cutting off values that do not fit.
+SELECT @@SESSION.sql_mode AS sql_mode,
+       IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%'
+          OR @@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%', 'PASS', 'FAIL') AS result;
