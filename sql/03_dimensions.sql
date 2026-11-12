@@ -4,7 +4,9 @@ USE healthcare;
 -- 1. CORE DIMENSIONS
 -- =============================================
 
+--
 -- dim_patient
+--
 CREATE TABLE IF NOT EXISTS dim_patient (
 	patient_key INT AUTO_INCREMENT PRIMARY KEY,
     patient_id VARCHAR(20) NOT NULL,
@@ -47,7 +49,9 @@ SELECT
     MAR_ST
 FROM stg_patient;
 
+--
 -- dim_role
+--
 CREATE TABLE IF NOT EXISTS dim_role (
     role_key INT AUTO_INCREMENT PRIMARY KEY,
     role_code INT NOT NULL,
@@ -60,8 +64,9 @@ CREATE TABLE IF NOT EXISTS dim_role (
 INSERT INTO dim_role (role_code, role_desc)
 SELECT DISTINCT ROLE_CD, ROLE_DES
 FROM stg_staff;
-
+--
 -- dim_staff
+--
 DROP TABLE IF EXISTS bridge_staff_id_resolution;
 DROP TABLE IF EXISTS dim_staff;
 
@@ -192,9 +197,116 @@ FROM (
             WHERE b.staff_id IS NULL OR b.staff_key_appointment = -1),
            0
 ) t;
-
+--
 -- dim_department
+--
+CREATE TABLE IF NOT EXISTS dim_department(
+	dept_key INT AUTO_INCREMENT PRIMARY KEY,
+    dept_id VARCHAR(20) NOT NULL,
+    dept_name VARCHAR(100),
+    dept_desc VARCHAR(200),
+    dept_loc VARCHAR(200),
+    
+    UNIQUE(dept_id)
+);	
+
+INSERT INTO dim_department (
+    dept_id,
+    dept_name,
+    dept_desc,
+    dept_loc
+)
+SELECT
+    DEP_ID,
+    DEP_NAME,
+    DEP_DES,
+    DEP_LOC
+FROM stg_department;
+
+--
 -- dim_room
+--
+DROP TABLE IF EXISTS dim_room;
+CREATE TABLE IF NOT EXISTS dim_room (
+    room_key            INT NOT NULL AUTO_INCREMENT,
+    room_id             VARCHAR(20) NOT NULL,
+    dept_id             VARCHAR(10) NULL,
+    purpose_code        VARCHAR(20) NULL,
+    purpose_desc        VARCHAR(50) NULL,
+    roomtype_code       VARCHAR(20) NULL,
+    roomtype_desc       VARCHAR(50) NULL,
+    capacity_num        INT NULL,
+    room_id_row_count   INT NOT NULL DEFAULT 1,
+    is_room_id_shared   TINYINT(1) NOT NULL DEFAULT 0,
+
+    PRIMARY KEY (room_key)
+);
+
+-- Populate the table
+INSERT INTO dim_room (
+    room_id, dept_id,
+    purpose_code, purpose_desc,
+    roomtype_code, roomtype_desc,
+    capacity_num, room_id_row_count, is_room_id_shared
+)
+SELECT
+    ROM_ID,
+    DEP_ID,
+    PRPS_CD,
+    PRPS_DES,
+    RTYPE_CD,
+    RTYPE_DES,
+    CPCT_NO,
+    COUNT(*) OVER (PARTITION BY ROM_ID),
+    COUNT(*) OVER (PARTITION BY ROM_ID) > 1
+FROM stg_rooms;
+
+-- Insert Unknown room
+INSERT INTO dim_room (
+    room_key, room_id, dept_id,
+    purpose_code, purpose_desc,
+    roomtype_code, roomtype_desc,
+    capacity_num, room_id_row_count, is_room_id_shared
+)
+VALUES (
+    -1, 'UNKNOWN', 'UNKNOWN',
+    'UNKNOWN', 'Unknown',
+    'UNKNOWN', 'Unknown',
+    NULL, 0, 0
+);
+
+-- Create resolution bridge
+CREATE TABLE bridge_room_id_resolution (
+    room_id VARCHAR(20) NOT NULL PRIMARY KEY,
+    room_id_row_count INT NOT NULL,
+    room_key_default INT NOT NULL,
+    room_key_visit INT NOT NULL,
+    resolution_rule VARCHAR(40) NOT NULL
+);
+
+-- Populate the bridge
+INSERT INTO bridge_room_id_resolution (
+    room_id, room_id_row_count,
+    room_key_default, room_key_visit, resolution_rule
+)
+SELECT
+    room_id,
+    COUNT(*),
+    CASE
+        WHEN COUNT(*) = 1 THEN MAX(room_key)
+        ELSE -1
+    END,
+    CASE
+        WHEN COUNT(*) = 1 THEN MAX(room_key)
+        ELSE -1
+    END,
+    CASE
+        WHEN COUNT(*) = 1 THEN 'UNIQUE_ID'
+        ELSE 'SHARED_ID_UNRESOLVED'
+    END
+FROM dim_room
+WHERE room_key <> -1
+GROUP BY room_id;
 
 -- =============================================
 -- 3. BUSINESS DIMENSIONS
