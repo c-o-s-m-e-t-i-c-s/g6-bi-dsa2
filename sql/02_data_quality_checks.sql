@@ -881,7 +881,7 @@ FROM (
 -- Adjust allowed lengths to match your actual dim_room DDL.
 -- ============================================================
 
-SELECT check_name, found, allowed,
+SELECT check_name, found, allowed, -- PASS
        IF(COALESCE(found, 0) <= allowed, 'PASS', 'FAIL') AS result
 FROM (
     SELECT 'ROM_ID length (room_id VARCHAR(20))' AS check_name,

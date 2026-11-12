@@ -7,6 +7,7 @@ USE healthcare;
 -- ==========================================================================================
 -- dim_patient
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_patient;
 CREATE TABLE IF NOT EXISTS dim_patient (
 	patient_key INT AUTO_INCREMENT PRIMARY KEY,
     patient_id VARCHAR(20) NOT NULL,
@@ -52,6 +53,7 @@ FROM stg_patient;
 -- ==========================================================================================
 -- dim_role
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_role;
 CREATE TABLE IF NOT EXISTS dim_role (
     role_key INT AUTO_INCREMENT PRIMARY KEY,
     role_code INT NOT NULL,
@@ -200,6 +202,7 @@ FROM (
 -- ==========================================================================================
 -- dim_department
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_department;
 CREATE TABLE IF NOT EXISTS dim_department(
 	dept_key INT AUTO_INCREMENT PRIMARY KEY,
     dept_id VARCHAR(20) NOT NULL,
@@ -312,9 +315,10 @@ GROUP BY room_id;
 -- 3. BUSINESS DIMENSIONS
 -- =============================================
 
--- =============================================
+-- ==========================================================================================
 -- dim_medicine_form
--- =============================================
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_medicine_form;
 CREATE TABLE IF NOT EXISTS dim_medicine_form (
 	form_key INT AUTO_INCREMENT PRIMARY KEY,
     form_code INT NOT NULL,
@@ -330,9 +334,10 @@ SELECT
 FROM stg_medicine
 WHERE FORM_CD IS NOT NULL
 GROUP BY FORM_CD;
--- =============================================
+-- ==========================================================================================
 -- dim_medicine_status
--- =============================================
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_medicine_status;
 CREATE TABLE dim_medicine_status (
     med_status_key INT AUTO_INCREMENT PRIMARY KEY,
     med_status_desc VARCHAR(50) NOT NULL UNIQUE
@@ -342,9 +347,10 @@ INSERT INTO dim_medicine_status (med_status_desc)
 SELECT DISTINCT MSTAT_DES
 FROM stg_medicine
 WHERE MSTAT_DES IS NOT NULL;
--- =============================================
+-- ==========================================================================================
 -- dim_unit_of_measure
--- =============================================
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_unit_of_measure;
 CREATE TABLE IF NOT EXISTS dim_unit_of_measure (
 	unit_key INT AUTO_INCREMENT PRIMARY KEY,
     unit_code VARCHAR(20) NOT NULL,
@@ -385,6 +391,7 @@ WHERE unit_key > 0;
 -- ==========================================================================================
 -- dim_medicine
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_medicine;
 CREATE TABLE IF NOT EXISTS dim_medicine (
     medicine_key       INT AUTO_INCREMENT PRIMARY KEY,
     medicine_id        VARCHAR(20) NOT NULL,
@@ -460,72 +467,231 @@ LEFT JOIN dim_unit_of_measure fu
 LEFT JOIN dim_medicine_status ms
     ON m.MSTAT_DES = ms.med_status_desc;
 
--- dim_equipment_type
-CREATE TABLE IF NOT EXISTS dim_equipment_type (
-	type_key INT AUTO_INCREMENT PRIMARY KEY,
-    type_code INT NOT NULL,
-    type_desc VARCHAR(30) NOT NULL
+-- ==========================================================================================
+-- dim_equipment
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_equipment;
+CREATE TABLE IF NOT EXISTS dim_equipment (
+    eqp_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    eqp_id VARCHAR(20) NOT NULL,
+    eqp_name VARCHAR(100) NULL,
+    eqp_type_code INT NULL,
+    eqp_type_desc VARCHAR(50) NULL,
+
+    eqp_cat_1 VARCHAR(50) NULL,
+    eqp_cat_2 VARCHAR(50) NULL,
+    eqp_cat_3 VARCHAR(50) NULL,
+
+    eqp_model_no VARCHAR(50) NULL,
+    eqp_storage_loc VARCHAR(50) NULL,
+
+    eqp_status_code INT NULL,
+    eqp_status_desc VARCHAR(50) NULL
 );
 
-INSERT INTO dim_equipment_type(
-	type_code, type_desc
+INSERT INTO dim_equipment (
+    eqp_id,
+    eqp_name,
+    eqp_type_code,
+    eqp_type_desc,
+    eqp_cat_1,
+    eqp_cat_2,
+    eqp_cat_3,
+    eqp_model_no,
+    eqp_storage_loc,
+    eqp_status_code,
+    eqp_status_desc
+)
+SELECT
+    EQP_ID,
+    EQP_NAME,
+    TYPE_CD,
+    TYPE_DES,
+    EQP_CAT__1,
+    EQP_CAT__2,
+    EQP_CAT__3,
+    MODL_NO,
+    STRG_LOC,
+    ESTAT_CD,
+    ESTAT_DES
+FROM stg_equipment;
+-- ==========================================================================================
+-- dim_country
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_country;
+CREATE TABLE IF NOT EXISTS dim_country (
+	country_key INT AUTO_INCREMENT PRIMARY KEY,
+    country_code INT NOT NULL,
+    country_name VARCHAR(20) NOT NULL,
+    
+    UNIQUE(country_code)
+);
+
+-- Populate tables
+INSERT INTO dim_country (
+	country_code, country_name
+)
+SELECT
+	CTRY_CD, MAX(CTRY_NAME)
+FROM stg_vendor
+WHERE CTRY_CD IS NOT NULL
+GROUP BY CTRY_CD;
+
+
+-- ==========================================================================================
+-- dim_vendor
+-- ==========================================================================================
+CREATE TABLE IF NOT EXISTS dim_vendor (
+	vendor_key INT AUTO_INCREMENT PRIMARY KEY,
+    vendor_acc VARCHAR(30) NOT NULL,
+    
+    vendor_name VARCHAR(50) NOT NULL,
+    vendor_type VARCHAR(20),
+    vendor_status_desc VARCHAR(20),
+    
+    license_num VARCHAR(30) NOT NULL,
+    
+    country_key INT,
+    country_contact_num VARCHAR(20),
+    
+    UNIQUE(vendor_acc),
+	FOREIGN KEY (country_key) REFERENCES dim_country(country_key)
+);
+
+-- Populate tables
+INSERT INTO dim_vendor (
+    vendor_acc,
+    vendor_name,
+    vendor_type,
+    vendor_status_desc,
+    license_num,
+    country_key,
+    country_contact_num
+)
+SELECT
+    v.VEN_ACC,
+    v.VEN_NAME,
+    v.VEN_TYPE,
+    v.VSTAT_DES,
+    v.LCNS_NO,
+    c.country_key,
+    v.CTRY_CON_NO
+FROM stg_vendor v
+LEFT JOIN dim_country c
+    ON v.CTRY_CD = c.country_code;
+    
+SELECT *
+FROM stg_vendor
+WHERE VEN_ACC = 'HA804814252';
+
+SELECT
+    country_code,
+    COUNT(*) AS record_count
+FROM dim_country
+WHERE country_code = (
+    SELECT CTRY_CD
+    FROM stg_vendor
+    WHERE VEN_ACC = 'HA804814252'
+    LIMIT 1
+)
+GROUP BY country_code;
+-- ==========================================================================================
+-- dim_insurance
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_insurance;
+CREATE TABLE dim_insurance (
+    insurance_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    policy_no VARCHAR(30) NOT NULL,
+    patient_key INT NULL,
+
+    insurance_company_name VARCHAR(100),
+    insurance_type_code VARCHAR(20),
+    insurance_type_desc VARCHAR(100),
+
+    policy_start_date DATE,
+    policy_end_date DATE,
+
+    insurance_status_code INT,
+    insurance_status_desc VARCHAR(100),
+
+    insurance_contact_no VARCHAR(20),
+
+    UNIQUE KEY uq_insurance_policy_period (
+        patient_key, policy_no, policy_start_date, policy_end_date
+    ),
+
+    FOREIGN KEY (patient_key)
+        REFERENCES dim_patient(patient_key)
+);
+
+INSERT INTO dim_insurance (
+    policy_no,
+    patient_key,
+    insurance_company_name,
+    insurance_type_code,
+    insurance_type_desc,
+    policy_start_date,
+    policy_end_date,
+    insurance_status_code,
+    insurance_status_desc,
+    insurance_contact_no
 )
 SELECT DISTINCT
-	TYPE_CD, TYPE_DES
-FROM stg_equipment;
+    i.POL_NO,
+    p.patient_key,
+    i.COM_NAME,
+    i.ITYPE_CD,
+    i.ITYPE_DES,
+    STR_TO_DATE(i.POL_ST, '%c/%e/%Y %H:%i'),
+    STR_TO_DATE(i.POL_ED, '%c/%e/%Y %H:%i'),
+    i.ISTAT_CD,
+    i.ISTAT_DES,
+    i.CON_NO
+FROM stg_insurance i
+LEFT JOIN dim_patient p
+    ON i.PAT_ID = p.patient_id;
 
--- dim_equipment_cat_1
-CREATE TABLE IF NOT EXISTS dim_equipment_cat_1 (
-	eqp_cat_1_key INT AUTO_INCREMENT PRIMARY KEY,
-    eqp_cat_1_desc VARCHAR(30) NOT NULL
-);
-
-INSERT INTO dim_equipment_cat_1(eqp_cat_1_desc)
-SELECT DISTINCT
-	EQP_CAT__1
-FROM stg_equipment;
-
--- dim_equipment_cat_2
-CREATE TABLE IF NOT EXISTS dim_equipment_cat_2 (
-	eqp_cat_2_key INT AUTO_INCREMENT PRIMARY KEY,
-    eqp_cat_2_desc VARCHAR(30) NOT NULL
-);
-
-INSERT INTO dim_equipment_cat_2(eqp_cat_2_desc)
-SELECT DISTINCT
-	EQP_CAT__2
-FROM stg_equipment;
-
--- dim_equipment_cat_3
-CREATE TABLE IF NOT EXISTS dim_equipment_cat_3 (
-	eqp_cat_3_key INT AUTO_INCREMENT PRIMARY KEY,
-    eqp_cat_3_desc VARCHAR(30)
-);
-
-INSERT INTO dim_equipment_cat_3(eqp_cat_3_desc)
-SELECT DISTINCT
-	EQP_CAT__3
-FROM stg_equipment;
-
--- dim_equipment_storage
-
--- dim_equipment_status
-
--- =============================================
--- dim_equipment
--- =============================================
-CREATE TABLE IF NOT EXISTS dim_equipment (
-	eqp_key INT AUTO_INCREMENT PRIMARY KEY,
-    eqp_name VARCHAR(30),
-    modl_no,
-);
--- dim_vendor
--- dim_insurance
+-- ==========================================================================================
 -- dim_diagnosis
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_diagnosis;
+CREATE TABLE IF NOT EXISTS dim_diagnosis (
+    diagnosis_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    diagnosis_code VARCHAR(20) NOT NULL,
+    diagnosis_desc VARCHAR(200),
+
+    UNIQUE (diagnosis_code)
+);
+
+INSERT INTO dim_diagnosis (
+    diagnosis_code,
+    diagnosis_desc
+)
+SELECT
+    DIG_CD,
+    MAX(DIG_DES)
+FROM stg_diagnosis
+WHERE DIG_CD IS NOT NULL
+GROUP BY DIG_CD;
+
+-- ==========================================================================================
 -- dim_treatment
+-- ==========================================================================================
+
+-- ==========================================================================================
 -- dim_date
+-- ==========================================================================================
+
+-- ==========================================================================================
 -- dim_medical_team
--- dim_inventory_item
+-- ==========================================================================================
+
+-- ==========================================================================================
+-- dim_inventory
+-- ==========================================================================================
 
 -- =============================================
 -- 4. BRIDGE TABLES
