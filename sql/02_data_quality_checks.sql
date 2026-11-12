@@ -774,3 +774,234 @@ FROM (
 SELECT @@SESSION.sql_mode AS sql_mode,
        IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%'
           OR @@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%', 'PASS', 'FAIL') AS result;
+
+-- stg_rooms has duplicate room IDs (!!)
+-- ISSUE: stg_rooms.ROM_ID is not unique per room
+    -- 4 ROM_IDs are duplicated, each appearing twice
+    -- 4 shared ROM_IDs have conflicting room attributes
+    -- J91861R: Laboratory (Compact, capacity 3) vs General Care (Large, capacity 11)
+    -- J93049V: Intensive Care (Extra Large, capacity 19) vs Staff (Compact, capacity 3)
+    -- O54049W: Critical Care (Large, capacity 14) vs Laboratory (Standard, capacity 5)
+    -- J90278M: also duplicated, but not referenced in stg_visit
+
+-- IMPACT ON VISITS:
+    -- 3/4 shared ROM_IDs appear in stg_visit
+    -- 185 visits reference ambiguous room IDs
+    -- J91861R: 62 visits
+    -- J93049V: 62 visits
+    -- O54049W: 61 visits
+    -- J90278M: 0 visits
+
+-- WHY IT LIKELY HAPPENED: dataset is synthetic and has no documentation
+    -- likely room IDs were assigned without a uniqueness check
+    -- another possibility is that records from different generation batches
+	--  or sources were merged, resulting in reused room IDs
+    -- a less likely possibility is that room IDs were recycled after
+	-- rooms were repurposed or reassigned
+
+-- HANDLING:
+    -- retained all source records in dim_room using surrogate room_key
+    -- added room_id_row_count and is_room_id_shared for identification
+    -- created bridge_room_id_resolution to handle ambiguous room IDs
+    -- unique ROM_IDs resolve to their corresponding room_key
+    -- shared ROM_IDs resolve to -1 (Unknown) because their correct
+	-- room configuration cannot be determined from ROM_ID alone
+-- ============================================================
+-- 0a. Staging and dimension column types (for reference)
+-- ============================================================
+
+SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'healthcare'
+  AND TABLE_NAME IN ('stg_rooms', 'dim_room')
+ORDER BY TABLE_NAME, ORDINAL_POSITION;
+
+-- ============================================================
+-- 0b. Source quality checks
+-- ============================================================
+
+SELECT 'stg_rooms has rows' AS check_name,
+       COUNT(*) AS found,
+       IF(COUNT(*) > 0, 'PASS', 'FAIL') AS result
+FROM stg_rooms
+
+UNION ALL
+
+SELECT 'no NULL ROM_ID',
+       COALESCE(SUM(ROM_ID IS NULL), 0),
+       IF(COALESCE(SUM(ROM_ID IS NULL), 0) = 0, 'PASS', 'FAIL')
+FROM stg_rooms
+
+UNION ALL
+
+SELECT 'duplicate ROM_ID values (expected: REVIEW)',
+       COUNT(*),
+       IF(COUNT(*) = 0, 'PASS', 'REVIEW')
+FROM (
+    SELECT ROM_ID
+    FROM stg_rooms
+    GROUP BY ROM_ID
+    HAVING COUNT(*) > 1
+) d
+
+UNION ALL
+
+SELECT 'exact duplicate room records',
+       COUNT(*),
+       IF(COUNT(*) = 0, 'PASS', 'REVIEW')
+FROM (
+    SELECT ROM_ID, DEP_ID, PRPS_CD, PRPS_DES,
+           RTYPE_CD, RTYPE_DES, CPCT_NO
+    FROM stg_rooms
+    GROUP BY ROM_ID, DEP_ID, PRPS_CD, PRPS_DES,
+             RTYPE_CD, RTYPE_DES, CPCT_NO
+    HAVING COUNT(*) > 1
+) d
+
+UNION ALL
+
+SELECT 'conflicting attributes under same ROM_ID (expected: REVIEW)',
+       COUNT(*),
+       IF(COUNT(*) = 0, 'PASS', 'REVIEW')
+FROM (
+    SELECT ROM_ID
+    FROM (
+        SELECT DISTINCT
+               ROM_ID, DEP_ID, PRPS_CD, PRPS_DES,
+               RTYPE_CD, RTYPE_DES, CPCT_NO
+        FROM stg_rooms
+    ) x
+    GROUP BY ROM_ID
+    HAVING COUNT(*) > 1
+) d;
+
+
+-- ============================================================
+-- 0c. Does the data fit the target types?
+-- Adjust allowed lengths to match your actual dim_room DDL.
+-- ============================================================
+
+SELECT check_name, found, allowed,
+       IF(COALESCE(found, 0) <= allowed, 'PASS', 'FAIL') AS result
+FROM (
+    SELECT 'ROM_ID length (room_id VARCHAR(20))' AS check_name,
+           MAX(CHAR_LENGTH(ROM_ID)) AS found,
+           20 AS allowed
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'DEP_ID length (dept_id VARCHAR(10))',
+           MAX(CHAR_LENGTH(DEP_ID)), 10
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'PRPS_CD length (purpose_code VARCHAR(20))',
+           MAX(CHAR_LENGTH(PRPS_CD)), 20
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'PRPS_DES length (purpose_desc VARCHAR(50))',
+           MAX(CHAR_LENGTH(PRPS_DES)), 50
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'RTYPE_CD length (roomtype_code VARCHAR(20))',
+           MAX(CHAR_LENGTH(RTYPE_CD)), 20
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'RTYPE_DES length (roomtype_desc VARCHAR(50))',
+           MAX(CHAR_LENGTH(RTYPE_DES)), 50
+    FROM stg_rooms
+
+    UNION ALL
+
+    SELECT 'CPCT_NO invalid integer values (capacity_num INT)',
+           COUNT(*), 0
+    FROM stg_rooms
+    WHERE CPCT_NO IS NOT NULL
+      AND TRIM(CAST(CPCT_NO AS CHAR)) NOT REGEXP '^[0-9]+$'
+) t;
+
+
+-- ============================================================
+-- 0d. Dimension population checks
+-- ============================================================
+
+SELECT check_name, found, expected,
+       IF(found = expected, 'PASS', 'FAIL') AS result
+FROM (
+    SELECT 'dim_room rows = stg_rooms rows + 1 Unknown member' AS check_name,
+           (SELECT COUNT(*) FROM dim_room) AS found,
+           (SELECT COUNT(*) FROM stg_rooms) + 1 AS expected
+
+    UNION ALL
+
+    SELECT 'room_key is unique',
+           (SELECT COUNT(DISTINCT room_key) FROM dim_room),
+           (SELECT COUNT(*) FROM dim_room)
+
+    UNION ALL
+
+    SELECT 'one Unknown room member',
+           (SELECT COUNT(*) FROM dim_room WHERE room_key = -1),
+           1
+
+    UNION ALL
+
+    SELECT 'room_id_row_count correctly identifies shared IDs',
+           (
+               SELECT COUNT(*)
+               FROM dim_room d
+               WHERE d.room_key <> -1
+                 AND d.room_id_row_count = (
+                     SELECT COUNT(*)
+                     FROM stg_rooms s
+                     WHERE s.ROM_ID = d.room_id
+                 )
+           ),
+           (SELECT COUNT(*) FROM dim_room WHERE room_key <> -1)
+
+    UNION ALL
+
+    SELECT 'is_room_id_shared correctly identifies duplicates',
+           (
+               SELECT COUNT(*)
+               FROM dim_room d
+               WHERE d.room_key <> -1
+                 AND d.is_room_id_shared =
+                     (d.room_id_row_count > 1)
+           ),
+           (SELECT COUNT(*) FROM dim_room WHERE room_key <> -1)
+
+    UNION ALL
+
+    SELECT 'dimension records with missing room_id',
+           (SELECT COUNT(*)
+            FROM dim_room
+            WHERE room_key <> -1 AND room_id IS NULL),
+           0
+
+    UNION ALL
+
+    SELECT 'dimension records with missing capacity',
+           (SELECT COUNT(*)
+            FROM dim_room
+            WHERE room_key <> -1 AND capacity_num IS NULL),
+           (SELECT COUNT(*) FROM stg_rooms WHERE CPCT_NO IS NULL)
+) t;
+
+
+-- ============================================================
+-- 0e. Strict mode
+-- ============================================================
+
+SELECT @@SESSION.sql_mode AS sql_mode,
+       IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%'
+          OR @@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%',
+          'PASS', 'FAIL') AS result;
