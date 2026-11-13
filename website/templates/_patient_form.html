@@ -1,0 +1,4 @@
+<form method="post" action="{{ url_for('add_patient') }}" novalidate><input type="hidden" name="csrf" value="{{csrf}}">{% if back is defined %}<input type="hidden" name="back" value="{{back}}">{% endif %}
+<div class="fg">{% for n,l,ph in [('full_name','Full name','Micah Elizabeth B. Zantua'),('birthdate','Birthdate','MM/DD/YYYY'),('contact','Contact number','09XX XXX XXXX'),('insurance','Insurance provider','Provider name')] %}
+<label>{{l}}<input name="{{n}}" placeholder="{{ph}}" value="{{form.get(n,'')}}" class="{{'bad' if errs.get(n)}}" {{'required' if n!='insurance'}} maxlength="80">{% if errs.get(n) %}<span class="err">{{errs[n]}}</span>{% endif %}</label>{% endfor %}</div>
+<div class="row"><button class="btn">Save record</button><button class="btn" type="button" onclick="this.form.querySelectorAll('input:not([type=hidden])').forEach(i=>{i.value='';i.classList.remove('bad')})">Clear fields</button></div></form>

@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% block body %}{% macro pie(a,b,la,lb) %}{% set t=(a+b) or 1 %}<div class="pie" style="background:conic-gradient(var(--mid) 0 {{(b/t*100)|round(1)}}%,var(--pale) 0)"></div><div class="leg"><i style="background:var(--pale)"></i>{{la}} ({{a}}) <i style="background:var(--mid)"></i>{{lb}} ({{b}})</div>{% endmacro %}
+<div class="dwrap"><div class="dash"><aside class="side"><img src="{{ url_for('static',filename='img/logo.png') }}" alt="Kacchan Care Hospital">
+{% for v,l in [('overview','Hospital Overview'),('finance','Finance'),('operations','Operations'),('inventory','Inventory'),('treatment','Treatment')] %}
+<a href="{{ url_for('dashboard',view=v,year=d.year,month=d.month,dept=d.dept) }}" class="{{'on' if d.view==v}} {{'lock' if v in ('finance','inventory') and role!='Admin'}}" {{'title="Admin only"' if v in ('finance','inventory') and role!='Admin'}}>{{l}}</a>{% endfor %}
+<form method="get"><input type="hidden" name="view" value="{{d.view}}">
+<label for="y">Year</label><select id="y" name="year" onchange="this.form.submit()">{% for y in ['2026','2025'] %}<option {{'selected' if y==d.year}}>{{y}}</option>{% endfor %}</select>
+<label for="m">Month</label><select id="m" name="month" onchange="this.form.submit()"><option>All</option>{% for i in range(1,13) %}<option value="{{i}}" {{'selected' if d.month==i|string}}>{{ ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i-1] }}</option>{% endfor %}</select>
+<label for="d">Department</label><select id="d" name="dept" onchange="this.form.submit()"><option>All</option>{% for x in d.depts %}<option value="{{x.id}}" {{'selected' if d.dept==x.id|string}}>{{x.name}}</option>{% endfor %}</select><noscript><button class="btn">Apply</button></noscript></form></aside>
+<main class="main"><h2><b>Dashboard</b> {{ d.view|title }}</h2>
+{% if d.visits==0 %}<div class="cc"><p>No records match these filters.</p></div>{% else %}
+<div class="dg">
+{% if d.view in ('overview','operations') %}
+<div class="k2"><div><em></em>Total No. of Patient Visits<b>{{ '{:,}'.format(d.visits) }}</b></div><div><em></em>Average Length of Stay<b>{{d.los}} hrs</b></div></div>
+<div class="k2"><div><em></em>Average Waiting Time<b>{{d.wait}} mins</b></div><div><em></em>Appointment Cancellation or No-Show Rate<b>{{d.noshow}}%</b></div></div>
+<div class="k2"><div><em></em>Readmission Rate<b>{{d.readm}}%</b></div><div><em></em>Treatment completion<b>{{d.comp}}%</b></div></div>
+<div class="k2"><div><em></em>Outstanding Accounts Receivable<b class="m">{{d.ar|money}}</b></div><div><em></em>Vendor Accounts Payable<b class="m">{{d.ap|money}}</b></div></div>
+<div class="cc sexc"><h3>Patients by Sex</h3>{{ pie(d.sex.get('Female',0), d.sex.get('Male',0),'Female','Male') }}</div>
+<div class="cc" style="grid-column:span 20"><h3>No. of Visits by Month</h3>{{ bars(d.trend) }}</div>
+<div class="cc" style="grid-column:span 20"><h3>Appointments by Type</h3>{{ pie(d.appt.get('Treatment',0), d.appt.get('Diagnosis',0),'Treatment','Diagnosis') }}</div>
+<div class="cc" style="grid-column:span 20"><h3>Treatments by Completion</h3>{{ bars(d.treat[:12],200,true) }}<div class="leg"><i class="sc0"></i>Completed<i class="sc1"></i>Partial<i class="sc2"></i>On Hold<i class="sc3"></i>Failed</div></div>
+<div class="cc" style="grid-column:span 30"><h3>Most Common Diagnoses</h3>{{ bars(d.dx[:12]) }}</div>
+<div class="cc" style="grid-column:span 30"><h3>Patients by Age Group</h3>{{ bars(d.ages,200,false,12) }}</div>
+{% if d.view=='operations' %}<div class="cc" style="grid-column:span 30"><h3>Visits by Department</h3>{{ bars(d.byDept) }}</div><div class="cc" style="grid-column:span 30"><h3>Appointments by Status</h3>{{ bars(d.astat) }}</div>{% endif %}
+{% elif d.view=='treatment' %}
+<div class="k2"><div><em></em>Treatment completion<b>{{d.comp}}%</b></div></div><div class="k2"><div><em></em>Total Visits<b>{{d.visits}}</b></div></div>
+<div class="cc" style="grid-column:span 60"><h3>Most Common Treatments by Completion</h3>{{ bars(d.treat[:12],240,true) }}<div class="leg"><i class="sc0"></i>Completed<i class="sc1"></i>Partial<i class="sc2"></i>On Hold<i class="sc3"></i>Failed</div></div>
+{% elif d.view=='finance' %}
+<div class="k2"><div><em></em>Outstanding Accounts Receivable<b class="m">{{d.ar|money}}</b></div></div><div class="k2"><div><em></em>Vendor Accounts Payable<b class="m">{{d.ap|money}}</b></div></div>
+<div class="cc" style="grid-column:span 60"><h3>Billed Amount by Month</h3>{{ bars(d.monthly,220) }}</div>
+<div class="cc" style="grid-column:span 60"><h3>Vendor Payables</h3><div style="overflow-x:auto"><table><tr><th>Vendor</th><th>Billed</th><th>Outstanding</th></tr>{% for v in d.vendors %}<tr><td>{{v.vendor}}</td><td>{{v.a|money}}</td><td>{{v.o|money}}</td></tr>{% endfor %}</table></div></div>
+{% else %}
+<div class="cc" style="grid-column:span 60"><h3>Stock Levels</h3><div style="overflow-x:auto"><table><tr><th>Supply</th><th>Category</th><th>Stock</th><th>Reorder at</th><th>Status</th></tr>{% for s in d.supplies %}<tr><td>{{s.name}}</td><td>{{s.category}}</td><td>{{s.stock}}</td><td>{{s.reorder_level}}</td><td class="{{'low' if s.stock<s.reorder_level}}">{{'Reorder' if s.stock<s.reorder_level else 'OK'}}</td></tr>{% endfor %}</table></div></div>
+{% endif %}</div>{% endif %}</main></div></div>{% endblock %}

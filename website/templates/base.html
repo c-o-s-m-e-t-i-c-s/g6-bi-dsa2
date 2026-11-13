@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{ title or 'Kacchan Care Hospital' }}</title><link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}"></head><body>
+{% macro bars(items,h=200,stack=false,n=6) %}<div class="bars{{' stack' if stack}}" style="height:{{h}}px">{% set mx=(items|map(attribute=1)|map('sum' if stack else 'abs')|list|max) if items else 1 %}{% for l,v in items %}<div title="{{l}}">{% if stack %}{% for x in v|reverse %}<i class="sc{{3-loop.index0}}" style="height:{{(x/(mx or 1)*(h-24))|round(1)}}px"></i>{% endfor %}{% else %}<i style="height:{{(v/(mx or 1)*(h-24))|round(1)}}px" title="{{v}}"></i>{% endif %}<span>{{l[:n]}}</span></div>{% endfor %}</div>{% endmacro %}
+<nav class="nav"><a href="{{ url_for('home') }}"><img src="{{ url_for('static',filename='img/logo.png') }}" alt="Kacchan Care Hospital"></a>
+<button class="burger" aria-label="Menu" aria-expanded="false">☰</button><ul>
+{% for e,l,k in [('home','Home','home'),('dashboard','Dashboard','dash'),('add_patient','Add Patient','add'),('about','About','about'),('contact','Contact','contact')] %}<li><a href="{{ url_for(e) }}" class="{{'on' if page==k}}">{{l}}</a></li>{% endfor %}
+<li>{% if user %}<form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{csrf}}"><button class="lnk" title="{{user}} ({{role}})">Log out</button></form>{% else %}<a href="{{ url_for('login') }}" class="{{'on' if page=='login'}}">Log in</a>{% endif %}</li></ul></nav>
+{% with m=get_flashed_messages(with_categories=true) %}{% for c,t in m %}<div class="flash {{c}}" role="status">{{t}}</div>{% endfor %}{% endwith %}
+{% block body %}{% endblock %}<script src="{{ url_for('static',filename='app.js') }}"></script></body></html>

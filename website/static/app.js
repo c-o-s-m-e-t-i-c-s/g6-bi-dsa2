@@ -1,0 +1,3 @@
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button,.tp').forEach(e=>e.classList.remove('on'));b.classList.add('on');document.getElementById(b.dataset.t).classList.add('on')});
+const bg=document.querySelector('.burger');if(bg)bg.onclick=()=>{const u=document.querySelector('.nav ul');u.classList.toggle('open');bg.setAttribute('aria-expanded',u.classList.contains('open'))};
+document.querySelectorAll('[data-role]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-role]').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.querySelector('[name=role]').value=b.dataset.role});
