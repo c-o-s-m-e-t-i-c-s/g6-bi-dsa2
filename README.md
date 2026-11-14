@@ -62,10 +62,10 @@ The group has chosen the [**Health Care Dataset (20+ Tables)**](https://www.kagg
 
 ## **Website**
 
-![homepage]({597590ED-297C-4DDB-ADC6-2E98EBEDA1B9}.png)
+!![Sample Website](docs/images/data-model.png)
 
 ## **Sample Dashboard**
-![dashboard]({27878A49-2039-44A2-9DA4-E3FF3C9D8059}.png)
+!![Dashboard overview](docs/images/dashboard-overview.png)
 
 ## **Solution Architecture**
 
