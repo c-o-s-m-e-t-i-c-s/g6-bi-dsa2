@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block body %}<div class="bgpage"><div class="card login"><div class="l"><h2>Staff access only</h2><div style="font-weight:200;font-size:22px">Please select your role.</div><hr>
+<button type="button" class="role" data-role="Staff"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><circle cx="5" cy="10" r="2.5"/><circle cx="19" cy="10" r="2.5"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6zM0 18c0-3 2-4.500 4-4.500zM24 18c0-3-2-4.500-4-4.500z"/></svg><span><b>Staff</b><small>Add and update patient records and view appointments.</small></span></button>
+<button type="button" class="role" data-role="Admin"><svg viewBox="0 0 24 24"><circle cx="10" cy="7" r="4"/><path d="M2 21c0-5 3-8 8-8s8 3 8 8z"/><circle cx="19" cy="19" r="3.500" fill="#fff" stroke="#285f92" stroke-width="2"/></svg><span><b>Admin</b><small>Full access, including the finance and inventory dashboard and user account management.</small></span></button></div>
+<div class="r"><h2 class="big">User Log In</h2><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><div class="fg">
+<label>Full name<input name="full_name" placeholder="Micah Elizabeth B. Zantua" value="{{form.get('full_name','')}}" required></label>
+<label>Role description<input name="role" placeholder="Role" value="{{form.get('role','')}}" required></label>
+<label>Staff ID<input name="staff_id" inputmode="numeric" placeholder="Staff ID" value="{{form.get('staff_id','')}}" required></label>
+<label>Department ID<input name="department_id" inputmode="numeric" placeholder="Department ID" value="{{form.get('department_id','')}}" required></label></div>
+<div class="row"><button class="btn">Log in</button><button class="btn" type="button" onclick="this.form.querySelectorAll('input:not([type=hidden])').forEach(i=>i.value='');document.querySelectorAll('[data-role]').forEach(x=>x.classList.remove('on'))">Clear fields</button></div></form></div></div></div>{% endblock %}
