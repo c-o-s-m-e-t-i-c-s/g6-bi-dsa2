@@ -580,8 +580,20 @@ FROM stg_billing
 GROUP BY REFR_NO, PAT_ID, BILL_DATE, BILL_AMT, BSTAT_CD, BSTAT_DES, BTYPE_CD
 HAVING COUNT(*) > 1;
 
--- 5. Diagnosis: Composite Key (REFR_NO + DIG_SEQ)
-SELECT REFR_NO, DIG_SEQ, COUNT(*) AS dup_count
+-- 5. Diagnosis: PASS
+-- A diagnosis code can appear many times across visits. Check for conflicting descriptions: PASS
+SELECT
+    DIG_CD,
+    COUNT(DISTINCT DIG_DES) AS description_count
+FROM stg_diagnosis
+GROUP BY DIG_CD
+HAVING COUNT(DISTINCT DIG_DES) > 1;
+
+-- Check for duplicate diagnosis occurrences within a visit PASS
+SELECT
+    REFR_NO,
+    DIG_SEQ,
+    COUNT(*) AS record_count
 FROM stg_diagnosis
 GROUP BY REFR_NO, DIG_SEQ
 HAVING COUNT(*) > 1;
@@ -598,11 +610,25 @@ FROM stg_equipment
 GROUP BY EQP_ID
 HAVING COUNT(*) > 1;
 
--- 8. Insurance: Unique POL_NO
-SELECT POL_NO, COUNT(*) AS dup_count
+-- 8. Insurance: PASS
+-- Check whether a patient has duplicate records for the same policy period PASS
+SELECT
+    PAT_ID,
+    POL_NO,
+    POL_ST,
+    POL_ED,
+    COUNT(*) AS record_count
+FROM stg_insurance
+GROUP BY PAT_ID, POL_NO, POL_ST, POL_ED
+HAVING COUNT(*) > 1;
+
+-- Check whether policy numbers are shared by different patients PASS
+SELECT
+    POL_NO,
+    COUNT(DISTINCT PAT_ID) AS patient_count
 FROM stg_insurance
 GROUP BY POL_NO
-HAVING COUNT(*) > 1;
+HAVING COUNT(DISTINCT PAT_ID) > 1;
 
 -- 9. Medicine Bills: Exact Row
 SELECT REFR_NO, PAT_ID, BILL_DATE, BILL_AMT, BSTAT_CD, BSTAT_DES, BTYPE_CD,  COUNT(*) AS dup_count
@@ -658,8 +684,25 @@ FROM stg_treatment_med
 GROUP BY REFR_NO, MEDS_SEQ, MED_ID
 HAVING COUNT(*) > 1;
 
--- 18. Treatment: Composite Key (REFR_NO + TRTM_SEQ)
-SELECT REFR_NO, TRTM_SEQ, COUNT(*) AS dup_count -- lost connection error
+-- 18. Treatment:
+-- Check whether a treatment code maps to conflicting descriptions or types: FAIL
+SELECT
+    TRTM_CD,
+    COUNT(DISTINCT TRTM_DES) AS description_count,
+    COUNT(DISTINCT TTYPE_CD) AS type_code_count,
+    COUNT(DISTINCT TTYPE_DES) AS type_desc_count
+FROM stg_treatment
+GROUP BY TRTM_CD
+HAVING
+    COUNT(DISTINCT TRTM_DES) > 1
+    OR COUNT(DISTINCT TTYPE_CD) > 1
+    OR COUNT(DISTINCT TTYPE_DES) > 1;
+
+-- Check duplicate treatment occurrences: PASS
+SELECT
+    REFR_NO,
+    TRTM_SEQ,
+    COUNT(*) AS record_count
 FROM stg_treatment
 GROUP BY REFR_NO, TRTM_SEQ
 HAVING COUNT(*) > 1;
@@ -774,6 +817,34 @@ FROM (
 SELECT @@SESSION.sql_mode AS sql_mode,
        IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%'
           OR @@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%', 'PASS', 'FAIL') AS result;
+
+-- SANITY CHECK FOR VALIDATION
+SELECT check_name, found, expected,
+       IF(found = expected, 'PASS', 'FAIL') AS result
+FROM (
+    SELECT 'dim_staff rows = stg_staff rows + 1 Unknown member' AS check_name,
+           (SELECT COUNT(*) FROM dim_staff) AS found,
+           (SELECT COUNT(*) FROM stg_staff) + 1 AS expected
+    UNION ALL
+    SELECT 'staff_key is unique',
+           (SELECT COUNT(DISTINCT staff_key) FROM dim_staff),
+           (SELECT COUNT(*) FROM dim_staff)
+    UNION ALL
+    SELECT 'bridge rows = distinct STF_ID in stg_staff',
+           (SELECT COUNT(*) FROM bridge_staff_id_resolution),
+           (SELECT COUNT(DISTINCT STF_ID) FROM stg_staff)
+    UNION ALL
+    SELECT 'dates loaded: stg_staff rows with HIRE_DATE vs dim_staff hire_date',
+           (SELECT COUNT(hire_date) FROM dim_staff WHERE staff_key <> -1),
+           (SELECT COUNT(HIRE_DATE) FROM stg_staff)
+    UNION ALL
+    SELECT 'appointments with missing or unresolved doctor (expect 0)',
+           (SELECT COUNT(*)
+            FROM stg_appointment a
+            LEFT JOIN bridge_staff_id_resolution b ON a.DOC_ID = b.staff_id
+            WHERE b.staff_id IS NULL OR b.staff_key_appointment = -1),
+           0
+) t;
 
 -- stg_rooms has duplicate room IDs (!!)
 -- ISSUE: stg_rooms.ROM_ID is not unique per room
@@ -1005,3 +1076,383 @@ SELECT @@SESSION.sql_mode AS sql_mode,
        IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%'
           OR @@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%',
           'PASS', 'FAIL') AS result;
+
+-- stg_treatment and dim_treatment duplicates 
+SELECT * FROM healthcare.stg_treatment;
+
+-- Check how frequently each treatment occurs:
+SELECT TRTM_TOT, COUNT(*) AS frequency
+FROM stg_treatment
+GROUP BY TRTM_TOT
+ORDER BY TRTM_TOT;
+
+-- Check REFR_NO duplicates:
+SELECT
+    REFR_NO,
+    COUNT(*) AS duplicate_count
+FROM stg_treatment
+GROUP BY REFR_NO
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Total number of REFR_NO duplicated values
+SELECT
+    REFR_NO,
+    COUNT(*) AS treatment_count,
+    COUNT(DISTINCT TRTM_CD) AS distinct_treatments,
+    COUNT(DISTINCT TTYPE_CD) AS distinct_types
+FROM stg_treatment
+GROUP BY REFR_NO
+HAVING COUNT(*) > 1
+ORDER BY treatment_count DESC
+LIMIT 20;
+
+-- Inspect actual records:
+SELECT
+    REFR_NO,
+    TRTM_CD,
+    TTYPE_CD,
+    COUNT(*) AS duplicate_count
+FROM stg_treatment
+GROUP BY REFR_NO, TRTM_CD, TTYPE_CD
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Inspect the suspicious records:
+SELECT *
+FROM stg_treatment
+WHERE (REFR_NO, TRTM_CD, TTYPE_CD) IN (
+    SELECT REFR_NO, TRTM_CD, TTYPE_CD
+    FROM stg_treatment
+    GROUP BY REFR_NO, TRTM_CD, TTYPE_CD
+    HAVING COUNT(*) > 1
+)
+ORDER BY REFR_NO, TRTM_CD, TTYPE_CD;
+
+-- Last validation: check whether REFR_NO + TRTM_SEQ uniquely identifies each record:
+SELECT
+    REFR_NO,
+    TRTM_SEQ,
+    COUNT(*) AS duplicate_count
+FROM stg_treatment
+GROUP BY REFR_NO, TRTM_SEQ
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Check whether the sequence count agrees with TRTM_TOT:
+SELECT
+    REFR_NO,
+    MAX(TRTM_TOT) AS expected_total,
+    COUNT(*) AS actual_rows,
+    COUNT(DISTINCT TRTM_SEQ) AS distinct_sequences
+FROM stg_treatment
+GROUP BY REFR_NO
+HAVING COUNT(*) <> MAX(TRTM_TOT)
+    OR COUNT(DISTINCT TRTM_SEQ) <> COUNT(*);
+    
+/*
+Final decision:
+Use one fact row per REFR_NO + TRTM_SEQ.
+Preserve repeated TRTM_CD values when they have different sequences.
+Keep TRTM_TOT as a source attribute for now, but don't sum it or use it to determine the number of treatments.
+Don't delete these records as duplicates.
+*/
+
+-- Additional treatment validations
+
+-- Treatment type
+SELECT
+    TTYPE_CD,
+    COUNT(DISTINCT TTYPE_DES) AS description_count
+FROM stg_treatment
+GROUP BY TTYPE_CD
+HAVING COUNT(DISTINCT TTYPE_DES) > 1;
+
+
+-- Treatment status
+SELECT
+    TSTAT_CD,
+    COUNT(DISTINCT TSTAT_DES) AS description_count
+FROM stg_treatment
+GROUP BY TSTAT_CD
+HAVING COUNT(DISTINCT TSTAT_DES) > 1;
+
+-- stg_medical_team and dim_medical_team
+-- Check whether a medical team ID has multiple records - YES
+SELECT
+    MEDT_ID,
+    COUNT(*) AS duplicate_count
+FROM stg_medical_team
+GROUP BY MEDT_ID
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Check whether same staff member appears more than once in the same team - YES
+SELECT
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    COUNT(*) AS duplicate_count
+FROM stg_medical_team
+GROUP BY MEDT_ID, TEAM_NO, STF_ID
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Check if records are genuine repeated assignments or duplicate source records - at most 2
+SELECT
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    ROLE_CD,
+    COUNT(*) AS duplicate_count
+FROM stg_medical_team
+GROUP BY MEDT_ID, TEAM_NO, STF_ID, ROLE_CD
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Check if one role code maps to multiple desc: NO
+SELECT
+    ROLE_CD,
+    COUNT(DISTINCT ROLE_DES) AS description_count
+FROM stg_medical_team
+GROUP BY ROLE_CD
+HAVING COUNT(DISTINCT ROLE_DES) > 1;
+
+-- Check whether all five columns are identical
+SELECT
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    ROLE_CD,
+    ROLE_DES,
+    COUNT(*) AS duplicate_count
+FROM stg_medical_team
+GROUP BY
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    ROLE_CD,
+    ROLE_DES
+HAVING COUNT(*) > 1
+ORDER BY duplicate_count DESC;
+
+-- Check NULL values - NONE
+SELECT
+    SUM(MEDT_ID IS NULL) AS null_medical_team_id,
+    SUM(TEAM_NO IS NULL) AS null_team_no,
+    SUM(STF_ID IS NULL) AS null_staff_id,
+    SUM(ROLE_CD IS NULL) AS null_role_code,
+    SUM(ROLE_DES IS NULL) AS null_role_desc
+FROM stg_medical_team;
+
+-- Check exact duplicate records
+SELECT
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    ROLE_CD,
+    ROLE_DES,
+    COUNT(*) AS occurrences
+FROM stg_medical_team
+GROUP BY
+    MEDT_ID,
+    TEAM_NO,
+    STF_ID,
+    ROLE_CD,
+    ROLE_DES
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;
+
+-- Check staff records for ambiguous staff IDs
+SELECT
+    staff_key,
+    staff_id,
+    first_name,
+    middle_name,
+    last_name,
+    gender_code,
+    date_of_birth,
+    dept_id,
+    role_key,
+    role_desc,
+    hire_date,
+    role_date
+FROM dim_staff
+WHERE staff_id IN (
+    '5870W', '5547E', '4989L', '6529N', '3884G',
+    '5894F', '7458H', '6856I', '6669L'
+)
+ORDER BY staff_id, staff_key;
+
+-- stg_inventory / dim_inventory duplicate checks
+-- check MAT_SKU - ~263 duplicates
+SELECT
+    MAT_SKU,
+    COUNT(*) AS occurrences
+FROM stg_inventory
+GROUP BY MAT_SKU
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;
+
+-- count distinct SKUs - 346302 distinct skus, 90385051 repeated skus, indicates inventory recorded is repeated over time
+SELECT
+    COUNT(*) AS total_records,
+    COUNT(DISTINCT MAT_SKU) AS distinct_skus,
+    COUNT(*) - COUNT(DISTINCT MAT_SKU) AS repeated_sku_records
+FROM stg_inventory;
+
+-- duplicate SKU and timestamp combinations
+SELECT
+    MAT_SKU,
+    INGTN_TS,
+    COUNT(*) AS occurrences
+FROM stg_inventory
+GROUP BY MAT_SKU, INGTN_TS
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;
+
+-- Investigate the repeated SKU + timestamp combinations (WARNING: 1978.265 sec / 0.000 sec runtime)
+SELECT
+    MAT_SKU,
+    INGTN_TS,
+    OPEN_QTY,
+    OPEN_STF,
+    RCVD_QTY,
+    RCVD_STF,
+    ISSD_QTY,
+    ISSD_STF,
+    CLSD_QTY,
+    CLSD_STF,
+    VRFC_STF
+FROM stg_inventory
+WHERE (MAT_SKU, INGTN_TS) IN (
+    SELECT MAT_SKU, INGTN_TS
+    FROM stg_inventory
+    GROUP BY MAT_SKU, INGTN_TS
+    HAVING COUNT(*) > 1
+)
+ORDER BY MAT_SKU, INGTN_TS;
+-- DECISION: Preserve these records, they are not exact duplicates
+-- MAT_SKU and INGTN_TS have diff inventory quantities and staff IDs
+
+-- stg_allergy & dim_allergy validation
+-- Duplicate allergy IDs with conflicting names - 0
+SELECT
+    ALG_ID,
+    COUNT(DISTINCT ALG_NAME) AS distinct_names
+FROM stg_allergy
+GROUP BY ALG_ID
+HAVING COUNT(DISTINCT ALG_NAME) > 1;
+
+-- Duplicate allergy IDs - 0
+SELECT
+    ALG_ID,
+    COUNT(*) AS occurrences
+FROM stg_allergy
+GROUP BY ALG_ID
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;
+
+-- Duplicate allergy names - 0
+SELECT
+    ALG_NAME,
+    COUNT(DISTINCT ALG_ID) AS distinct_ids
+FROM stg_allergy
+GROUP BY ALG_NAME
+HAVING COUNT(DISTINCT ALG_ID) > 1;
+
+-- NULL check - 0
+SELECT
+    SUM(ALG_ID IS NULL) AS null_allergy_ids,
+    SUM(ALG_NAME IS NULL) AS null_allergy_names
+FROM stg_allergy;
+
+-- final validation
+-- Total records
+SELECT COUNT(*) AS total_allergies
+FROM dim_allergy;
+
+-- Duplicate IDs
+SELECT allergy_id, COUNT(*) AS occurrences
+FROM dim_allergy
+GROUP BY allergy_id
+HAVING COUNT(*) > 1;
+
+-- Missing allergy names
+SELECT COUNT(*) AS missing_names
+FROM dim_allergy
+WHERE allergy_name IS NULL;
+
+-- bridge_patient_allergy / stg_patient_allergy validation
+-- total records - 644133
+SELECT COUNT(*) AS total_records
+FROM bridge_patient_allergy;
+
+-- unresolved patients - none
+SELECT COUNT(*) AS unresolved_patients
+FROM bridge_patient_allergy
+WHERE patient_key IS NULL;
+
+-- unresolved allergies - 644133
+SELECT COUNT(*) AS unresolved_allergies
+FROM bridge_patient_allergy
+WHERE allergy_key IS NULL;
+
+-- duplicate combinations - none
+SELECT
+    source_patient_id,
+    source_allergy_id,
+    severity_code,
+    reaction_code,
+    COUNT(*) AS occurrences
+FROM bridge_patient_allergy
+GROUP BY
+    source_patient_id,
+    source_allergy_id,
+    severity_code,
+    reaction_code
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;
+
+-- missing attributes - none
+SELECT
+    SUM(severity_code IS NULL) AS missing_severity_codes,
+    SUM(severity_desc IS NULL) AS missing_severity_desc,
+    SUM(reaction_code IS NULL) AS missing_reaction_codes,
+    SUM(reaction_desc IS NULL) AS missing_reaction_desc
+FROM bridge_patient_allergy;
+
+-- Let's check whether the identifiers actually overlap:
+SELECT
+    COUNT(DISTINCT pa.ALG_ID) AS patient_allergy_ids,
+    COUNT(DISTINCT a.allergy_id) AS matched_allergy_ids
+FROM stg_patient_allergy pa
+LEFT JOIN dim_allergy a
+    ON TRIM(pa.ALG_ID) = TRIM(a.allergy_id);
+-- Identify unmatched allergy IDs
+SELECT
+    pa.ALG_ID,
+    COUNT(*) AS occurrences
+FROM stg_patient_allergy pa
+LEFT JOIN dim_allergy a
+    ON TRIM(pa.ALG_ID) = TRIM(a.allergy_id)
+WHERE a.allergy_key IS NULL
+GROUP BY pa.ALG_ID
+ORDER BY occurrences DESC
+LIMIT 30;
+
+SELECT DISTINCT ALG_ID
+FROM stg_allergy
+ORDER BY ALG_ID;
+
+SELECT DISTINCT ALG_ID
+FROM stg_patient_allergy
+ORDER BY ALG_ID;
+
+SELECT
+    COUNT(DISTINCT pa.ALG_ID) AS patient_allergy_ids,
+    COUNT(DISTINCT a.ALG_ID) AS matched_allergy_ids
+FROM stg_patient_allergy pa
+LEFT JOIN stg_allergy a
+    ON CAST(TRIM(pa.ALG_ID) AS UNSIGNED)
+     = CAST(TRIM(a.ALG_ID) AS UNSIGNED);

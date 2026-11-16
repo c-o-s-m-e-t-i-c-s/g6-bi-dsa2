@@ -1,5 +1,38 @@
 USE healthcare;
 
+/*
+TABLE OF CONTENTS: (use Ctrl + F to find tables faster)
+1. CORE DIMENSIONS
+	- dim_patient
+    - dim_role
+    - dim_staff
+	- dim_department
+    - dim_room
+2. MEDICAL DIMENSIONS
+	- dim_medicine_form
+    - dim_medicine_status
+    - dim_unit_of_measure
+    - dim_medicine
+    - dim_diagnosis
+    - dim_treatment_type
+    - dim_treatment_status
+    - dim_treatment
+    - dim_allergy
+3. BUSINESS DIMENSIONS
+	- dim_country
+    - dim_vendor
+    - dim_insurance
+    - dim_date
+    - dim_medical_team
+    - dim_inventory
+4. BRIDGE TABLES
+	- bridge_staff_id_resolution
+	- bridge_room_id_resolution
+    - bridge_medical_team_staff
+    - brdige_patient_allergy
+
+*/
+
 -- =============================================
 -- 1. CORE DIMENSIONS
 -- =============================================
@@ -66,12 +99,11 @@ CREATE TABLE IF NOT EXISTS dim_role (
 INSERT INTO dim_role (role_code, role_desc)
 SELECT DISTINCT ROLE_CD, ROLE_DES
 FROM stg_staff;
---
--- dim_staff
---
-DROP TABLE IF EXISTS bridge_staff_id_resolution;
-DROP TABLE IF EXISTS dim_staff;
 
+-- ==========================================================================================
+-- dim_staff
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_staff;
 CREATE TABLE dim_staff (
     staff_key            INT AUTO_INCREMENT NOT NULL,
     staff_id             VARCHAR(20)  NOT NULL,
@@ -94,16 +126,6 @@ CREATE TABLE dim_staff (
     salary_mn			 DECIMAL(10,2) NULL,
     PRIMARY KEY (staff_key),
 	FOREIGN KEY (role_key) REFERENCES dim_role(role_key)
-);
-
-CREATE TABLE bridge_staff_id_resolution (
-    staff_id               VARCHAR(20)  NOT NULL,
-    staff_id_row_count     INT          NOT NULL,
-    doctor_candidates      INT          NOT NULL,
-    staff_key_default      INT          NOT NULL,
-    staff_key_appointment  INT          NOT NULL,
-    resolution_rule        VARCHAR(40)  NOT NULL,
-    PRIMARY KEY (staff_id)
 );
 
 -- Populate dimension
@@ -148,57 +170,6 @@ INSERT INTO dim_staff
 VALUES
     (-1, 'UNKNOWN', 'Unknown', 'Unknown', 32, 'Unknown', 0, 0);
 
--- Bridge: one row per staff_id
-INSERT INTO bridge_staff_id_resolution
-    (staff_id, staff_id_row_count, doctor_candidates,
-     staff_key_default, staff_key_appointment, resolution_rule)
-SELECT
-    s.staff_id,
-    COUNT(*),
-    SUM(s.role_desc = 'Doctor'),
-    CASE WHEN COUNT(*) = 1 THEN MAX(s.staff_key)
-         ELSE -1
-    END,
-    CASE WHEN COUNT(*) = 1 THEN MAX(s.staff_key)
-         WHEN SUM(s.role_desc = 'Doctor') = 1
-              THEN MAX(CASE WHEN s.role_desc = 'Doctor' THEN s.staff_key END)
-         ELSE -1
-    END,
-    CASE WHEN COUNT(*) = 1 THEN 'UNIQUE_ID'
-         WHEN SUM(s.role_desc = 'Doctor') = 1 THEN 'SHARED_ID_RESOLVED_BY_DOCTOR_ROLE'
-         ELSE 'SHARED_ID_UNRESOLVED'
-    END
-FROM dim_staff s
-WHERE s.staff_key <> -1
-GROUP BY s.staff_id;
-
--- SANITY CHECK FOR VALIDATION
-SELECT check_name, found, expected,
-       IF(found = expected, 'PASS', 'FAIL') AS result
-FROM (
-    SELECT 'dim_staff rows = stg_staff rows + 1 Unknown member' AS check_name,
-           (SELECT COUNT(*) FROM dim_staff) AS found,
-           (SELECT COUNT(*) FROM stg_staff) + 1 AS expected
-    UNION ALL
-    SELECT 'staff_key is unique',
-           (SELECT COUNT(DISTINCT staff_key) FROM dim_staff),
-           (SELECT COUNT(*) FROM dim_staff)
-    UNION ALL
-    SELECT 'bridge rows = distinct STF_ID in stg_staff',
-           (SELECT COUNT(*) FROM bridge_staff_id_resolution),
-           (SELECT COUNT(DISTINCT STF_ID) FROM stg_staff)
-    UNION ALL
-    SELECT 'dates loaded: stg_staff rows with HIRE_DATE vs dim_staff hire_date',
-           (SELECT COUNT(hire_date) FROM dim_staff WHERE staff_key <> -1),
-           (SELECT COUNT(HIRE_DATE) FROM stg_staff)
-    UNION ALL
-    SELECT 'appointments with missing or unresolved doctor (expect 0)',
-           (SELECT COUNT(*)
-            FROM stg_appointment a
-            LEFT JOIN bridge_staff_id_resolution b ON a.DOC_ID = b.staff_id
-            WHERE b.staff_id IS NULL OR b.staff_key_appointment = -1),
-           0
-) t;
 -- ==========================================================================================
 -- dim_department
 -- ==========================================================================================
@@ -278,41 +249,8 @@ VALUES (
     NULL, 0, 0
 );
 
--- Create resolution bridge
-CREATE TABLE bridge_room_id_resolution (
-    room_id VARCHAR(20) NOT NULL PRIMARY KEY,
-    room_id_row_count INT NOT NULL,
-    room_key_default INT NOT NULL,
-    room_key_visit INT NOT NULL,
-    resolution_rule VARCHAR(40) NOT NULL
-);
-
--- Populate the bridge
-INSERT INTO bridge_room_id_resolution (
-    room_id, room_id_row_count,
-    room_key_default, room_key_visit, resolution_rule
-)
-SELECT
-    room_id,
-    COUNT(*),
-    CASE
-        WHEN COUNT(*) = 1 THEN MAX(room_key)
-        ELSE -1
-    END,
-    CASE
-        WHEN COUNT(*) = 1 THEN MAX(room_key)
-        ELSE -1
-    END,
-    CASE
-        WHEN COUNT(*) = 1 THEN 'UNIQUE_ID'
-        ELSE 'SHARED_ID_UNRESOLVED'
-    END
-FROM dim_room
-WHERE room_key <> -1
-GROUP BY room_id;
-
 -- =============================================
--- 3. BUSINESS DIMENSIONS
+-- 2. MEDICAL DIMENSIONS
 -- =============================================
 
 -- ==========================================================================================
@@ -466,6 +404,123 @@ LEFT JOIN dim_unit_of_measure fu
     ON m.FMQTY_UN = fu.unit_code
 LEFT JOIN dim_medicine_status ms
     ON m.MSTAT_DES = ms.med_status_desc;
+
+-- ==========================================================================================
+-- dim_diagnosis
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_diagnosis;
+CREATE TABLE IF NOT EXISTS dim_diagnosis (
+    diagnosis_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    diagnosis_code INT NOT NULL,
+    diagnosis_desc VARCHAR(200),
+
+    UNIQUE (diagnosis_code)
+);
+
+INSERT INTO dim_diagnosis (
+    diagnosis_code,
+    diagnosis_desc
+)
+SELECT
+    DIG_CD,
+    MAX(DIG_DES)
+FROM stg_diagnosis
+WHERE DIG_CD IS NOT NULL
+GROUP BY DIG_CD;
+
+-- ==========================================================================================
+-- dim_treatment_type
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_treatment_type;
+CREATE TABLE IF NOT EXISTS dim_treatment_type (
+	treatment_type_key INT AUTO_INCREMENT PRIMARY KEY,
+    treatment_type_code INT NOT NULL,
+    treatment_type_desc VARCHAR(20) NOT NULL,
+    UNIQUE(treatment_type_code)
+);
+
+INSERT INTO dim_treatment_type (
+	treatment_type_code,
+    treatment_type_desc
+)
+SELECT
+	TTYPE_CD,
+    MAX(TTYPE_DES)
+FROM stg_treatment
+WHERE TTYPE_CD is NOT NULL
+GROUP BY TTYPE_CD;
+
+
+-- ==========================================================================================
+-- dim_treatment_status
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_treatment_status;
+CREATE TABLE IF NOT EXISTS dim_treatment_status (
+	treatment_status_key INT AUTO_INCREMENT PRIMARY KEY,
+    treatment_status_code INT NOT NULL,
+    treatment_status_desc VARCHAR(20),
+    UNIQUE(treatment_status_code)
+);
+
+INSERT INTO dim_treatment_status (
+	treatment_status_code,
+    treatment_status_desc
+)
+SELECT
+	TSTAT_CD,
+    MAX(TSTAT_DES)
+FROM stg_treatment
+WHERE TSTAT_CD is NOT NULL
+GROUP BY TSTAT_CD;
+
+-- ==========================================================================================
+-- dim_treatment
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_treatment;
+CREATE TABLE IF NOT EXISTS dim_treatment (
+	treatment_key INT AUTO_INCREMENT PRIMARY KEY,
+    treatment_code INT NOT NULL,
+    treatment_desc VARCHAR (100) NOT NULL,
+    UNIQUE(treatment_code)
+);
+
+INSERT INTO dim_treatment (
+    treatment_code,
+    treatment_desc
+)
+SELECT
+    TRTM_CD,
+    MAX(TRTM_DES)
+FROM stg_treatment
+WHERE TRTM_CD IS NOT NULL
+GROUP BY TRTM_CD;
+
+-- addtl. notes: create fact_treatment and use dim_treatment, dim_treatment_type, dim_treatment_status as connections using their surrogate keys
+-- also check 02_data_quality_checks for decisions on validation 
+
+-- ==========================================================================================
+-- dim_allergy
+-- ==========================================================================================
+DROP TABLE IF EXISTS dim_allergy;
+CREATE TABLE IF NOT EXISTS dim_allergy (
+    allergy_key INT AUTO_INCREMENT PRIMARY KEY,
+    allergy_id INT NOT NULL,
+    allergy_name VARCHAR(255),
+    UNIQUE (allergy_id)
+);
+
+INSERT INTO dim_allergy (allergy_id, allergy_name)
+SELECT
+    LPAD(TRIM(ALG_ID), 3, '0'),
+    MAX(ALG_NAME)
+FROM stg_allergy
+WHERE ALG_ID IS NOT NULL
+GROUP BY LPAD(TRIM(ALG_ID), 3, '0');
+
+-- =============================================
+-- 3. BUSINESS DIMENSIONS
+-- =============================================
 
 -- ==========================================================================================
 -- dim_equipment
@@ -654,48 +709,280 @@ LEFT JOIN dim_patient p
     ON i.PAT_ID = p.patient_id;
 
 -- ==========================================================================================
--- dim_diagnosis
--- ==========================================================================================
-DROP TABLE IF EXISTS dim_diagnosis;
-CREATE TABLE IF NOT EXISTS dim_diagnosis (
-    diagnosis_key INT AUTO_INCREMENT PRIMARY KEY,
-
-    diagnosis_code VARCHAR(20) NOT NULL,
-    diagnosis_desc VARCHAR(200),
-
-    UNIQUE (diagnosis_code)
-);
-
-INSERT INTO dim_diagnosis (
-    diagnosis_code,
-    diagnosis_desc
-)
-SELECT
-    DIG_CD,
-    MAX(DIG_DES)
-FROM stg_diagnosis
-WHERE DIG_CD IS NOT NULL
-GROUP BY DIG_CD;
-
--- ==========================================================================================
--- dim_treatment
--- ==========================================================================================
-
--- ==========================================================================================
 -- dim_date
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_date;
+CREATE TABLE dim_date (
+    date_key INT PRIMARY KEY,
+    full_date DATE NOT NULL UNIQUE,
 
--- ==========================================================================================
--- dim_medical_team
--- ==========================================================================================
+    day INT NOT NULL,
+    day_of_week_num INT NOT NULL,
+    day_of_week_name VARCHAR(10) NOT NULL,
+
+    month INT NOT NULL,
+    month_name VARCHAR(10) NOT NULL,
+
+    quarter INT NOT NULL,
+    year INT NOT NULL,
+
+    is_weekend TINYINT(1) NOT NULL
+);
+
+-- Populate table (2000 - 2035)
+INSERT INTO dim_date (
+    date_key,
+    full_date,
+    day,
+    day_of_week_num,
+    day_of_week_name,
+    month,
+    month_name,
+    quarter,
+    year,
+    is_weekend
+)
+SELECT
+    CAST(DATE_FORMAT(d.full_date, '%Y%m%d') AS UNSIGNED),
+    d.full_date,
+    DAY(d.full_date),
+    WEEKDAY(d.full_date) + 1,
+    DAYNAME(d.full_date),
+    MONTH(d.full_date),
+    MONTHNAME(d.full_date),
+    QUARTER(d.full_date),
+    YEAR(d.full_date),
+    IF(WEEKDAY(d.full_date) >= 5, 1, 0)
+FROM (
+    SELECT DATE_ADD('2000-01-01', INTERVAL n DAY) AS full_date
+    FROM (
+        SELECT
+            a.n + (b.n * 10) + (c.n * 100) +
+            (d.n * 1000) + (e.n * 10000) AS n
+        FROM
+            (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+             UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+        CROSS JOIN
+            (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+             UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+        CROSS JOIN
+            (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+             UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c
+        CROSS JOIN
+            (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+             UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d
+        CROSS JOIN
+            (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+             UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e
+    ) numbers
+    WHERE n <= DATEDIFF('2035-12-31', '2000-01-01')
+) d;
 
 -- ==========================================================================================
 -- dim_inventory
+-- Grain: one row per distinct MAT_SKU
 -- ==========================================================================================
+DROP TABLE IF EXISTS dim_inventory;
+CREATE TABLE dim_inventory (
+    inventory_key INT AUTO_INCREMENT PRIMARY KEY,
+    material_sku VARCHAR(50) NOT NULL,
+    UNIQUE (material_sku)
+);
+
+INSERT INTO dim_inventory (
+    material_sku
+)
+SELECT DISTINCT
+    MAT_SKU
+FROM stg_inventory
+WHERE MAT_SKU IS NOT NULL;
 
 -- =============================================
 -- 4. BRIDGE TABLES
 -- =============================================
 
--- bridge_patient_allergy
+-- ==========================================================================================
+-- bridge_staff_id_resolution
+-- ==========================================================================================
+DROP TABLE IF EXISTS bridge_staff_id_resolution;
+CREATE TABLE IF NOT EXISTS bridge_staff_id_resolution (
+    staff_id               VARCHAR(20)  NOT NULL,
+    staff_id_row_count     INT          NOT NULL,
+    doctor_candidates      INT          NOT NULL,
+    staff_key_default      INT          NOT NULL,
+    staff_key_appointment  INT          NOT NULL,
+    resolution_rule        VARCHAR(40)  NOT NULL,
+    PRIMARY KEY (staff_id)
+);
+
+-- Bridge: one row per staff_id
+INSERT INTO bridge_staff_id_resolution
+    (staff_id, staff_id_row_count, doctor_candidates,
+     staff_key_default, staff_key_appointment, resolution_rule)
+SELECT
+    s.staff_id,
+    COUNT(*),
+    SUM(s.role_desc = 'Doctor'),
+    CASE WHEN COUNT(*) = 1 THEN MAX(s.staff_key)
+         ELSE -1
+    END,
+    CASE WHEN COUNT(*) = 1 THEN MAX(s.staff_key)
+         WHEN SUM(s.role_desc = 'Doctor') = 1
+              THEN MAX(CASE WHEN s.role_desc = 'Doctor' THEN s.staff_key END)
+         ELSE -1
+    END,
+    CASE WHEN COUNT(*) = 1 THEN 'UNIQUE_ID'
+         WHEN SUM(s.role_desc = 'Doctor') = 1 THEN 'SHARED_ID_RESOLVED_BY_DOCTOR_ROLE'
+         ELSE 'SHARED_ID_UNRESOLVED'
+    END
+FROM dim_staff s
+WHERE s.staff_key <> -1
+GROUP BY s.staff_id;
+
+-- ==========================================================================================
+-- bridge_room_id_resolution
+-- ==========================================================================================
+DROP TABLE IF EXISTS bridge_room_id_resolution;
+CREATE TABLE IF NOT EXISTS bridge_room_id_resolution (
+    room_id VARCHAR(20) NOT NULL PRIMARY KEY,
+    room_id_row_count INT NOT NULL,
+    room_key_default INT NOT NULL,
+    room_key_visit INT NOT NULL,
+    resolution_rule VARCHAR(40) NOT NULL
+);
+
+-- Populate the bridge
+INSERT INTO bridge_room_id_resolution (
+    room_id, room_id_row_count,
+    room_key_default, room_key_visit, resolution_rule
+)
+SELECT
+    room_id,
+    COUNT(*),
+    CASE
+        WHEN COUNT(*) = 1 THEN MAX(room_key)
+        ELSE -1
+    END,
+    CASE
+        WHEN COUNT(*) = 1 THEN MAX(room_key)
+        ELSE -1
+    END,
+    CASE
+        WHEN COUNT(*) = 1 THEN 'UNIQUE_ID'
+        ELSE 'SHARED_ID_UNRESOLVED'
+    END
+FROM dim_room
+WHERE room_key <> -1
+GROUP BY room_id;
+
+-- ==========================================================================================
 -- bridge_medical_team_staff
+-- Grain: One staff member assigned to one role within one medical team.
+-- ==========================================================================================
+DROP TABLE IF EXISTS bridge_medical_team_staff;
+CREATE TABLE bridge_medical_team_staff (
+    medical_team_staff_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    medical_team_id VARCHAR(20) NOT NULL,
+    team_no INT NOT NULL,
+
+    source_staff_id VARCHAR(20) NOT NULL,
+    staff_key INT NULL,
+
+    role_code INT NOT NULL,
+    role_desc VARCHAR(50) NOT NULL,
+
+    UNIQUE KEY uq_medical_team_staff (
+        medical_team_id,
+        team_no,
+        source_staff_id,
+        role_code
+    ),
+
+    FOREIGN KEY (staff_key)
+        REFERENCES dim_staff(staff_key)
+);
+
+-- Populate table
+INSERT INTO bridge_medical_team_staff (
+    medical_team_id,
+    team_no,
+    source_staff_id,
+    staff_key,
+    role_code,
+    role_desc
+)
+SELECT DISTINCT
+    mt.MEDT_ID,
+    mt.TEAM_NO,
+    mt.STF_ID,
+    s.staff_key,
+    mt.ROLE_CD,
+    mt.ROLE_DES
+FROM stg_medical_team mt
+LEFT JOIN (
+    SELECT
+        staff_id,
+        MIN(staff_key) AS staff_key
+    FROM dim_staff
+    WHERE staff_key <> -1
+    GROUP BY staff_id
+    HAVING COUNT(*) = 1
+) s
+    ON mt.STF_ID = s.staff_id;
+
+-- addtl. notes: 9740 unresolved records (3.11%) of the bridge table have duplicate staff_id 
+-- shared by diff. indivs in dim_staff, making reliable identification using staff_id alone
+-- retained NULL in staff_key to avoid incorrect staff assignments
+-- preserved for traceability
+
+-- ==========================================================================================
+-- bridge_patient_allergy
+-- ==========================================================================================
+DROP TABLE IF EXISTS bridge_patient_allergy;
+CREATE TABLE bridge_patient_allergy (
+    patient_allergy_key INT AUTO_INCREMENT PRIMARY KEY,
+
+    source_patient_id VARCHAR(20) NOT NULL,
+    patient_key INT NULL,
+
+    source_allergy_id INT NOT NULL,
+    allergy_key INT NULL,
+
+    severity_code INT,
+    severity_desc VARCHAR(20),
+
+    reaction_code INT,
+    reaction_desc VARCHAR(20),
+
+    FOREIGN KEY (patient_key)
+        REFERENCES dim_patient(patient_key),
+
+    FOREIGN KEY (allergy_key)
+        REFERENCES dim_allergy(allergy_key)
+);
+
+INSERT INTO bridge_patient_allergy (
+    source_patient_id,
+    patient_key,
+    source_allergy_id,
+    allergy_key,
+    severity_code,
+    severity_desc,
+    reaction_code,
+    reaction_desc
+)
+SELECT DISTINCT
+    pa.PAT_ID,
+    p.patient_key,
+    pa.ALG_ID,
+    a.allergy_key,
+    pa.SVR_CD,
+    pa.SVR_DES,
+    pa.RCT_CD,
+    pa.RCT_DES
+FROM stg_patient_allergy pa
+LEFT JOIN dim_patient p
+    ON pa.PAT_ID = p.patient_id
+LEFT JOIN dim_allergy a
+    ON pa.ALG_ID = a.allergy_id;
