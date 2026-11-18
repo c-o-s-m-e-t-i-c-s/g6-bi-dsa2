@@ -1,1 +1,241 @@
+DROP TABLE IF EXISTS fact_inventory;
+TRUNCATE TABLE fact_inventory;
+USE healthcare;
 
+CREATE TABLE fact_inventory (
+    inventory_key INT AUTO_INCREMENT PRIMARY KEY,
+    opened_by_staff_key INT,
+    received_by_staff_key INT,
+    issued_by_staff_key INT,
+    closed_by_staff_key INT,
+    verified_by_staff_key INT,
+    material_sku VARCHAR(20) NOT NULL,
+    ingestion_date DATE NOT NULL,
+    ingestion_timestamp DATETIME,
+    opening_qty DECIMAL(10,2),
+    received_qty DECIMAL(10,2),
+    issued_qty DECIMAL(10,2),
+    closing_qty DECIMAL(10,2)
+);
+
+-- ==========================================================================================
+-- STEP 1: Fast pre-trimmed staff lookup table & ensure all SKUs exist in dim_inventory
+-- ==========================================================================================
+DROP TEMPORARY TABLE IF EXISTS tmp_staff_lookup;
+
+CREATE TEMPORARY TABLE tmp_staff_lookup (
+    staff_id VARCHAR(50) PRIMARY KEY,
+    staff_key_default INT NOT NULL
+);
+
+INSERT IGNORE INTO tmp_staff_lookup (staff_id, staff_key_default)
+SELECT TRIM(staff_id), staff_key_default
+FROM bridge_staff_id_resolution
+WHERE staff_id IS NOT NULL;
+
+-- Ensure any new SKUs in stg_inventory exist in dim_inventory (same fix as fact_supply_receipt)
+INSERT IGNORE INTO dim_inventory (material_sku)
+SELECT DISTINCT TRIM(s.MAT_SKU)
+FROM stg_inventory s
+LEFT JOIN dim_inventory inv
+    ON TRIM(s.MAT_SKU) = inv.material_sku
+WHERE s.MAT_SKU IS NOT NULL
+  AND TRIM(s.MAT_SKU) <> ''
+  AND inv.inventory_key IS NULL;
+
+-- ==========================================================================================
+-- STEP 2: Create fact_inventory WITHOUT indexes/FKs first for fast bulk loading
+-- ==========================================================================================
+DROP TABLE IF EXISTS fact_inventory;
+
+CREATE TABLE fact_inventory (
+    inventory_fact_key INT AUTO_INCREMENT PRIMARY KEY,
+    inventory_key INT NOT NULL,
+    ingestion_date_key INT NOT NULL,
+    opened_by_staff_key INT NOT NULL,
+    received_by_staff_key INT NOT NULL,
+    issued_by_staff_key INT NOT NULL,
+    closed_by_staff_key INT NOT NULL,
+    verified_by_staff_key INT NOT NULL,
+    ingestion_timestamp DATETIME,
+    opening_qty DECIMAL(12,2),
+    received_qty DECIMAL(12,2),
+    issued_qty DECIMAL(12,2),
+    closing_qty DECIMAL(12,2)
+);
+
+-- ==========================================================================================
+-- STEP 3: Load in Batches (Run each batch one by one or in small groups)
+-- Check your min/max dates first if needed: SELECT MIN(INGTN_TS), MAX(INGTN_TS) FROM stg_inventory;
+-- ==========================================================================================
+
+-- Batch 1: Up to 2021-12-31
+INSERT INTO fact_inventory (
+    inventory_key, ingestion_date_key, opened_by_staff_key, received_by_staff_key,
+    issued_by_staff_key, closed_by_staff_key, verified_by_staff_key,
+    ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+)
+SELECT
+    inv.inventory_key,
+    dt.date_key,
+    COALESCE(opn_res.staff_key_default, -1),
+    COALESCE(rcv_res.staff_key_default, -1),
+    COALESCE(iss_res.staff_key_default, -1),
+    COALESCE(cls_res.staff_key_default, -1),
+    COALESCE(vrf_res.staff_key_default, -1),
+    s.INGTN_TS,
+    s.OPEN_QTY,
+    s.RCVD_QTY,
+    s.ISSD_QTY,
+    s.CLSD_QTY
+FROM stg_inventory s
+JOIN dim_inventory inv ON TRIM(s.MAT_SKU) = inv.material_sku
+JOIN dim_date dt ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN tmp_staff_lookup opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN tmp_staff_lookup rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN tmp_staff_lookup iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN tmp_staff_lookup cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN tmp_staff_lookup vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.INGTN_TS < '2022-01-01';
+
+-- Batch 2: 2022
+INSERT INTO fact_inventory (
+    inventory_key, ingestion_date_key, opened_by_staff_key, received_by_staff_key,
+    issued_by_staff_key, closed_by_staff_key, verified_by_staff_key,
+    ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+)
+SELECT
+    inv.inventory_key,
+    dt.date_key,
+    COALESCE(opn_res.staff_key_default, -1),
+    COALESCE(rcv_res.staff_key_default, -1),
+    COALESCE(iss_res.staff_key_default, -1),
+    COALESCE(cls_res.staff_key_default, -1),
+    COALESCE(vrf_res.staff_key_default, -1),
+    s.INGTN_TS,
+    s.OPEN_QTY,
+    s.RCVD_QTY,
+    s.ISSD_QTY,
+    s.CLSD_QTY
+FROM stg_inventory s
+JOIN dim_inventory inv ON TRIM(s.MAT_SKU) = inv.material_sku
+JOIN dim_date dt ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN tmp_staff_lookup opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN tmp_staff_lookup rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN tmp_staff_lookup iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN tmp_staff_lookup cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN tmp_staff_lookup vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.INGTN_TS >= '2022-01-01' AND s.INGTN_TS < '2023-01-01';
+
+-- Batch 3: 2023
+INSERT INTO fact_inventory (
+    inventory_key, ingestion_date_key, opened_by_staff_key, received_by_staff_key,
+    issued_by_staff_key, closed_by_staff_key, verified_by_staff_key,
+    ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+)
+SELECT
+    inv.inventory_key,
+    dt.date_key,
+    COALESCE(opn_res.staff_key_default, -1),
+    COALESCE(rcv_res.staff_key_default, -1),
+    COALESCE(iss_res.staff_key_default, -1),
+    COALESCE(cls_res.staff_key_default, -1),
+    COALESCE(vrf_res.staff_key_default, -1),
+    s.INGTN_TS,
+    s.OPEN_QTY,
+    s.RCVD_QTY,
+    s.ISSD_QTY,
+    s.CLSD_QTY
+FROM stg_inventory s
+JOIN dim_inventory inv ON TRIM(s.MAT_SKU) = inv.material_sku
+JOIN dim_date dt ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN tmp_staff_lookup opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN tmp_staff_lookup rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN tmp_staff_lookup iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN tmp_staff_lookup cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN tmp_staff_lookup vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.INGTN_TS >= '2023-01-01' AND s.INGTN_TS < '2024-01-01';
+
+-- Batch 4: 2024
+INSERT INTO fact_inventory (
+    inventory_key, ingestion_date_key, opened_by_staff_key, received_by_staff_key,
+    issued_by_staff_key, closed_by_staff_key, verified_by_staff_key,
+    ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+)
+SELECT
+    inv.inventory_key,
+    dt.date_key,
+    COALESCE(opn_res.staff_key_default, -1),
+    COALESCE(rcv_res.staff_key_default, -1),
+    COALESCE(iss_res.staff_key_default, -1),
+    COALESCE(cls_res.staff_key_default, -1),
+    COALESCE(vrf_res.staff_key_default, -1),
+    s.INGTN_TS,
+    s.OPEN_QTY,
+    s.RCVD_QTY,
+    s.ISSD_QTY,
+    s.CLSD_QTY
+FROM stg_inventory s
+JOIN dim_inventory inv ON TRIM(s.MAT_SKU) = inv.material_sku
+JOIN dim_date dt ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN tmp_staff_lookup opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN tmp_staff_lookup rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN tmp_staff_lookup iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN tmp_staff_lookup cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN tmp_staff_lookup vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.INGTN_TS >= '2024-01-01' AND s.INGTN_TS < '2025-01-01';
+
+-- Batch 5: 2025 onward
+INSERT INTO fact_inventory (
+    inventory_key, ingestion_date_key, opened_by_staff_key, received_by_staff_key,
+    issued_by_staff_key, closed_by_staff_key, verified_by_staff_key,
+    ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+)
+SELECT
+    inv.inventory_key,
+    dt.date_key,
+    COALESCE(opn_res.staff_key_default, -1),
+    COALESCE(rcv_res.staff_key_default, -1),
+    COALESCE(iss_res.staff_key_default, -1),
+    COALESCE(cls_res.staff_key_default, -1),
+    COALESCE(vrf_res.staff_key_default, -1),
+    s.INGTN_TS,
+    s.OPEN_QTY,
+    s.RCVD_QTY,
+    s.ISSD_QTY,
+    s.CLSD_QTY
+FROM stg_inventory s
+JOIN dim_inventory inv ON TRIM(s.MAT_SKU) = inv.material_sku
+JOIN dim_date dt ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN tmp_staff_lookup opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN tmp_staff_lookup rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN tmp_staff_lookup iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN tmp_staff_lookup cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN tmp_staff_lookup vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.INGTN_TS >= '2025-01-01';
+
+-- ==========================================================================================
+-- STEP 4: Add indexes and foreign keys in bulk AFTER all batches finish
+-- ==========================================================================================
+ALTER TABLE fact_inventory
+    ADD FOREIGN KEY (inventory_key) REFERENCES dim_inventory(inventory_key),
+    ADD FOREIGN KEY (ingestion_date_key) REFERENCES dim_date(date_key),
+    ADD FOREIGN KEY (opened_by_staff_key) REFERENCES dim_staff(staff_key),
+    ADD FOREIGN KEY (received_by_staff_key) REFERENCES dim_staff(staff_key),
+    ADD FOREIGN KEY (issued_by_staff_key) REFERENCES dim_staff(staff_key),
+    ADD FOREIGN KEY (closed_by_staff_key) REFERENCES dim_staff(staff_key),
+    ADD FOREIGN KEY (verified_by_staff_key) REFERENCES dim_staff(staff_key),
+    ADD INDEX fact_inventory_ix_1 (inventory_key),
+    ADD INDEX fact_inventory_ix_2 (ingestion_date_key),
+    ADD INDEX fact_inventory_ix_3 (received_by_staff_key);
+
+-- ==========================================================================================
+-- STEP 5: Validation
+-- ==========================================================================================
+SELECT check_name, found, expected,
+       IF(found = expected, 'PASS', 'FAIL') AS result
+FROM (
+    SELECT 'fact_inventory rows = stg_inventory rows' AS check_name,
+           (SELECT COUNT(*) FROM fact_inventory) AS found,
+           (SELECT COUNT(*) FROM stg_inventory) AS expected
+) t;
