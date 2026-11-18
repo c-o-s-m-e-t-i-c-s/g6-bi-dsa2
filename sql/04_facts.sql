@@ -263,53 +263,53 @@ FROM (
 CREATE TABLE fact_visit (
     visit_key INT AUTO_INCREMENT PRIMARY KEY,
     patient_key INT NOT NULL,
-    doctor_key INT NOT NULL,
+    room_key INT NOT NULL,
     visit_date_key INT NOT NULL,
     visit_status_key INT NOT NULL,
     visit_type_key INT NOT NULL,
     -- Degenerate Dimensions & Timestamps
     visit_ref_no VARCHAR(20) NOT NULL,
-    source_medical_team_id VARCHAR(20),
-    source_doctor_id VARCHAR(20),
+    medical_team_id VARCHAR(20),
+    source_room_id VARCHAR(20),
     visit_entry DATETIME,
     visit_exit DATETIME,
     -- Foreign Keys
     FOREIGN KEY (patient_key) REFERENCES dim_patient(patient_key),
-    FOREIGN KEY (doctor_key) REFERENCES dim_staff(staff_key),
+    FOREIGN KEY (room_key) REFERENCES dim_room(room_key),
     FOREIGN KEY (visit_date_key) REFERENCES dim_date(date_key),
     FOREIGN KEY (visit_status_key) REFERENCES dim_visit_status(visit_status_key),
     FOREIGN KEY (visit_type_key) REFERENCES dim_visit_type(visit_type_key)
 );
 
 CREATE INDEX fact_visit_ix_1 ON fact_visit(patient_key);
-CREATE INDEX fact_visit_ix_2 ON fact_visit(doctor_key);
+CREATE INDEX fact_visit_ix_2 ON fact_visit(room_key);
 CREATE INDEX fact_visit_ix_3 ON fact_visit(visit_date_key);
 CREATE INDEX fact_visit_ix_4 ON fact_visit(visit_status_key);
 CREATE INDEX fact_visit_ix_5 ON fact_visit(visit_type_key);
-CREATE INDEX fact_visit_ix_6 ON fact_visit(source_medical_team_id);
+CREATE INDEX fact_visit_ix_6 ON fact_visit(medical_team_id);
 
 -- Populate fact
 INSERT INTO fact_visit (
     patient_key,
-    doctor_key,
+    room_key,
     visit_date_key,
     visit_status_key,
     visit_type_key,
     visit_ref_no,
-    source_medical_team_id,
-    source_doctor_id,
+    medical_team_id,
+    source_room_id,
     visit_entry,
     visit_exit
 )
 SELECT
     p.patient_key,
-    COALESCE(d_res.staff_key_appointment, -1) AS doctor_key,
+    COALESCE(r.room_key, -1) AS room_key,
     dt.date_key AS visit_date_key,
     vst.visit_status_key,
     vtp.visit_type_key,
     s.REFR_NO,
     s.TEAM_ID,
-    s.DOC_ID,
+    s.ROM_ID,
     s.VST_EN AS visit_entry,
     s.VST_EX AS visit_exit
 FROM stg_visit s
@@ -317,8 +317,8 @@ JOIN dim_patient p
     ON s.PAT_ID = p.patient_id
 JOIN dim_date dt
     ON DATE(s.VST_EN) = dt.full_date
-LEFT JOIN bridge_staff_id_resolution d_res
-    ON TRIM(s.DOC_ID) = TRIM(d_res.staff_id)
+LEFT JOIN dim_room r
+    ON s.ROM_ID = r.room_id
 JOIN dim_visit_status vst
     ON s.VSTAT_CD = vst.visit_status_code
 JOIN dim_visit_type vtp
