@@ -303,22 +303,22 @@ INSERT INTO fact_visit (
 )
 SELECT
     p.patient_key,
-    COALESCE(r.room_key, -1) AS room_key,
+    COALESCE(r_res.room_key_visit, -1) AS room_key,
     dt.date_key AS visit_date_key,
     vst.visit_status_key,
     vtp.visit_type_key,
     s.REFR_NO,
-    s.TEAM_ID,
+    s.MEDT_ID,
     s.ROM_ID,
-    s.VST_EN AS visit_entry,
-    s.VST_EX AS visit_exit
+    s.VIS_EN AS visit_entry,
+    s.VIS_EX AS visit_exit
 FROM stg_visit s
 JOIN dim_patient p
     ON s.PAT_ID = p.patient_id
 JOIN dim_date dt
-    ON DATE(s.VST_EN) = dt.full_date
-LEFT JOIN dim_room r
-    ON s.ROM_ID = r.room_id
+    ON DATE(s.VIS_EN) = dt.full_date
+LEFT JOIN bridge_room_id_resolution r_res
+    ON TRIM(s.ROM_ID) = TRIM(r_res.room_id)
 JOIN dim_visit_status vst
     ON s.VSTAT_CD = vst.visit_status_code
 JOIN dim_visit_type vtp
@@ -331,6 +331,13 @@ FROM (
     SELECT 'fact_visit rows = stg_visit rows' AS check_name,
            (SELECT COUNT(*) FROM fact_visit) AS found,
            (SELECT COUNT(*) FROM stg_visit) AS expected
+    UNION ALL
+    SELECT 'fact_visit unresolved rooms match non-UNIQUE_ID rooms in bridge',
+           (SELECT COUNT(*) FROM fact_visit WHERE room_key = -1),
+           (SELECT COUNT(*)
+            FROM stg_visit s
+            LEFT JOIN bridge_room_id_resolution b ON TRIM(s.ROM_ID) = TRIM(b.room_id)
+            WHERE b.room_id IS NULL OR b.room_key_visit = -1)
     UNION ALL
     SELECT 'fact_visit exits before entry (expect 0)',
            (SELECT COUNT(*) FROM fact_visit WHERE visit_exit < visit_entry),
