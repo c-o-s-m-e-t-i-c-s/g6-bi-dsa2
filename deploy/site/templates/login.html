@@ -5,5 +5,6 @@
 <label>Full name<input name="full_name" placeholder="Micah Elizabeth B. Zantua" value="{{form.get('full_name','')}}" required></label>
 <label>Role description<input name="role" placeholder="Role" value="{{form.get('role','')}}" required></label>
 <label>Staff ID<input name="staff_id" inputmode="numeric" placeholder="Staff ID" value="{{form.get('staff_id','')}}" required></label>
-<label>Department ID<input name="department_id" inputmode="numeric" placeholder="Department ID" value="{{form.get('department_id','')}}" required></label></div>
+<label>Department ID<input name="department_id" inputmode="numeric" placeholder="Department ID" value="{{form.get('department_id','')}}" required></label>
+{% if production %}<label>Password<input name="password" type="password" autocomplete="current-password" required></label>{% endif %}</div>
 <div class="row"><button class="btn">Log in</button><button class="btn" type="button" onclick="this.form.querySelectorAll('input:not([type=hidden])').forEach(i=>i.value='');document.querySelectorAll('[data-role]').forEach(x=>x.classList.remove('on'))">Clear fields</button></div></form></div></div></div>{% endblock %}

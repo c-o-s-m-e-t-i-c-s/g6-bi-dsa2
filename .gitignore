@@ -2,6 +2,11 @@
 # Python cache files
 __pycache__/
 *.pyc
+*.sqlite3
+*.sqlite3-journal
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Environment variables and secrets
 .env

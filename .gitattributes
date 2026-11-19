@@ -1,0 +1,2 @@
+# Database files belong to private persistent storage, never source release archives.
+deploy/site/kacchan.db export-ignore

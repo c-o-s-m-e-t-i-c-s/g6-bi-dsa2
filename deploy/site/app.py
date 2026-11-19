@@ -1,16 +1,39 @@
-import os, re, sqlite3, random, secrets
+import os, re, sqlite3, random, secrets, hashlib
+from pathlib import Path
+from contextlib import closing
+import click
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import check_password_hash
 from datetime import date, datetime, timedelta
 from functools import wraps
 from flask import Flask, g, render_template, request, redirect, url_for, session, flash, abort
 
-app = Flask(__name__)
+app = Flask(__name__, root_path=str(Path(__file__).resolve().parent))
+PRODUCTION = os.environ.get('APP_ENV') == 'production'
 app.secret_key = os.environ.get("SECRET_KEY", "dev-change-me")
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=PRODUCTION, PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
 DB = os.environ.get("DATABASE", os.path.join(os.path.dirname(__file__), "kacchan.db"))
+STAFF_PASSWORD_HASHES = {str(i): os.environ.get(f'STAFF_PASSWORD_HASH_{i}', '') for i in range(1, 5)}
+if PRODUCTION:
+    if len(app.secret_key) < 32:
+        raise RuntimeError('Production SECRET_KEY must contain at least 32 characters.')
+    path = Path(DB)
+    if not path.is_absolute() or path.resolve().is_relative_to(Path(__file__).resolve().parent):
+        raise RuntimeError('Production DATABASE must be an absolute SQLite path outside the release site.')
+    if any(not value.startswith(('scrypt:', 'pbkdf2:')) or value.count('$') != 2
+           for value in STAFF_PASSWORD_HASHES.values()):
+        raise RuntimeError('Configure individual Werkzeug STAFF_PASSWORD_HASH_1 through _4 values.')
+    # One trusted loopback Nginx proxy; it must overwrite X-Forwarded-Proto.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
+
+
+def database_uri(mode='rw'):
+    return Path(DB).resolve().as_uri() + '?mode=' + mode
 
 def db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB); g.db.row_factory = sqlite3.Row
+        g.db = sqlite3.connect(database_uri(), uri=True, timeout=8); g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys=ON")
     return g.db
 @app.teardown_appcontext
@@ -19,11 +42,34 @@ def close(_):
     if d: d.close()
 
 def init_db():
-    c = sqlite3.connect(DB)
-    c.executescript(open(os.path.join(os.path.dirname(__file__), "schema.sql")).read())
-    if c.execute("SELECT COUNT(*) FROM patient").fetchone()[0] == 0:
-        seed(c)
-    c.commit(); c.close()
+    with closing(sqlite3.connect(DB)) as c:
+        c.execute('PRAGMA foreign_keys=ON')
+        c.executescript(Path(__file__).with_name('schema.sql').read_text())
+        if c.execute("SELECT COUNT(*) FROM patient").fetchone()[0] == 0:
+            seed(c)
+        c.commit()
+
+
+@app.cli.command('init-demo-db')
+@click.option('--confirm-synthetic', is_flag=True, required=True,
+              help='Create a new isolated database using fictional demonstration records.')
+def init_demo_db(confirm_synthetic):
+    """Initialize once, refusing to overwrite any existing database."""
+    if not confirm_synthetic:
+        raise click.ClickException('Explicit synthetic initialization is required.')
+    path = Path(DB)
+    if not path.parent.is_dir():
+        raise click.ClickException('Create the private persistent parent directory first.')
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+    except FileExistsError:
+        raise click.ClickException('Database already exists; initialization refuses to overwrite it.')
+    try:
+        init_db()
+    except Exception:
+        raise click.ClickException('Initialization failed; inspect the new private file before retrying.')
+    click.echo('Initialized new isolated SQLite database with synthetic demonstration records.')
 
 def seed(c):  # fictional sample data only
     r = random.Random(7)
@@ -64,7 +110,10 @@ def login_required(admin=False):
     def deco(f):
         @wraps(f)
         def w(*a, **k):
-            if "uid" not in session:
+            expected = STAFF_PASSWORD_HASHES.get(str(session.get('uid')), '')
+            authenticated = not PRODUCTION or (expected and secrets.compare_digest(
+                session.get('auth_version', ''), hashlib.sha256(expected.encode()).hexdigest()))
+            if "uid" not in session or not authenticated:
                 flash("Please log in with your staff credentials first.", "err"); return redirect(url_for("login", next=request.path))
             if admin and session.get("role") != "Admin": abort(403)
             return f(*a, **k)
@@ -73,10 +122,12 @@ def login_required(admin=False):
 
 @app.before_request
 def csrf():
+    if request.endpoint == 'health':
+        return
     session.setdefault("csrf", secrets.token_hex(16))
     if request.method == "POST" and request.form.get("csrf") != session["csrf"]: abort(400)
 @app.context_processor
-def ctx(): return dict(csrf=session.get("csrf"), user=session.get("name"), role=session.get("role"))
+def ctx(): return dict(csrf=session.get("csrf"), user=session.get("name"), role=session.get("role"), production=PRODUCTION)
 @app.errorhandler(403)
 def e403(e): return render_template("msg.html", title="Admin access only", text="Your role does not have access to this page."), 403
 @app.errorhandler(404)
@@ -172,6 +223,32 @@ def about(): return render_template("about.html", page="about")
 @app.route("/contact")
 def contact(): return render_template("contact.html", page="contact")
 
+
+@app.get('/health/')
+def health():
+    """Read-only database readiness without returning records or counts."""
+    try:
+        with closing(sqlite3.connect(database_uri('ro'), uri=True, timeout=3)) as connection:
+            if connection.execute('PRAGMA quick_check(1)').fetchone()[0] != 'ok':
+                return {'status': 'database_unavailable'}, 503
+            projections = {
+                'department': 'id,name',
+                'staff': 'id,full_name,role,department_id,active',
+                'patient': 'id,code,full_name,birthdate,sex,contact,insurance,created_by,archived,created_at',
+                'visit': 'id,patient_id,department_id,visit_date,wait_min,stay_hours,diagnosis,readmitted',
+                'appointment': 'id,patient_id,staff_id,appt_date,type,status',
+                'treatment': 'id,visit_id,name,status',
+                'invoice': 'id,patient_id,visit_id,amount,paid,issued',
+                'vendor_bill': 'id,vendor,amount,paid,issued',
+                'supply': 'id,name,category,stock,reorder_level,unit_cost',
+                'audit_log': 'id,staff_id,action,detail,at',
+            }
+            for table, columns in projections.items():
+                connection.execute(f'SELECT {columns} FROM {table} WHERE 1=0')
+        return {'status': 'ok'}
+    except sqlite3.Error:
+        return {'status': 'database_unavailable'}, 503
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     f = request.form if request.method == "POST" else {}
@@ -179,8 +256,14 @@ def login():
         row = db().execute("SELECT * FROM staff WHERE id=? AND department_id=? AND role=? AND lower(full_name)=lower(?) AND active=1",
             (f.get("staff_id", "").strip() or 0, f.get("department_id", "").strip() or 0, f.get("role", "").strip().title(), " ".join(f.get("full_name", "").split()))).fetchone() \
             if f.get("staff_id", "").strip().isdigit() and f.get("department_id", "").strip().isdigit() else None
-        if row:
-            session.clear(); session.update(uid=row["id"], name=row["full_name"], role=row["role"], csrf=secrets.token_hex(16)); audit("login")
+        password_hash = STAFF_PASSWORD_HASHES.get(str(row['id']), '') if row else ''
+        verified = not PRODUCTION or (password_hash and check_password_hash(password_hash, f.get('password', '')))
+        if row and verified:
+            session.clear(); session.update(uid=row["id"], name=row["full_name"], role=row["role"], csrf=secrets.token_hex(16))
+            if PRODUCTION:
+                session['auth_version'] = hashlib.sha256(password_hash.encode()).hexdigest()
+                session.permanent = True
+            audit("login")
             nxt = request.args.get("next", ""); return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else url_for("dashboard"))
         flash("Those details do not match an active staff account.", "err")
     return render_template("login.html", form=f, page="login")
@@ -188,5 +271,6 @@ def login():
 @app.route("/logout", methods=["POST"])
 def logout(): session.clear(); flash("You have been logged out.", "ok"); return redirect(url_for("home"))
 
-init_db()
+if not PRODUCTION:
+    init_db()
 if __name__ == "__main__": app.run(debug=os.environ.get("FLASK_DEBUG") == "1")

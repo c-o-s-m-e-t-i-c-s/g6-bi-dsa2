@@ -1,4 +1,4 @@
-name: Deploy paid site
+name: Deploy web app
 
 on:
   push:
@@ -8,78 +8,10 @@ on:
 permissions: {}
 
 concurrency:
-  group: paid-site-kchospital
+  group: ust-webapp-kchospital
   cancel-in-progress: false
 
 jobs:
-  validate-migrations:
-    needs: package
-    if: needs.package.outputs.migrations == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: ci-root-password
-          MYSQL_DATABASE: migration_test
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
-          --health-interval=5s --health-timeout=5s --health-retries=20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-        with:
-          persist-credentials: false
-      - name: Validate and execute migration pairs on MySQL 8.4
-        shell: bash
-        env:
-          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          root = Path('deploy/migrations')
-          files = sorted(p.name for p in root.iterdir()) if root.exists() else []
-          if not files:
-              raise SystemExit('No migration inputs found for validation job')
-          pattern = re.compile(r'([0-9]{4})_([a-z][a-z0-9_]{0,59})\.(sql|verify\.sql)')
-          pairs = {}
-          for name in files:
-              match = pattern.fullmatch(name)
-              if not match or match.group(1) == '0000':
-                  raise SystemExit(f'Invalid migration filename: {name}')
-              number, _, kind = match.groups()
-              pair = pairs.setdefault(number, set())
-              key = 'verify' if kind == 'verify.sql' else 'up'
-              if key in pair:
-                  raise SystemExit(f'Duplicate migration number: {number}')
-              pair.add(key)
-          if any(pair != {'up', 'verify'} for pair in pairs.values()):
-              raise SystemExit('Every migration requires matching .sql and .verify.sql files')
-          if [int(number) for number in sorted(pairs)] != list(range(1, len(pairs) + 1)):
-              raise SystemExit('Migration numbers must be contiguous from 0001')
-          if len(files) > 100 or sum((root / name).stat().st_size for name in files) > 16 * 1024 * 1024:
-              raise SystemExit('Migration input limits exceeded')
-          for name in files:
-              data = (root / name).read_bytes()
-              if not data.endswith(b'\n') or len(data) > 256 * 1024 or b'\r' in data or b'\x00' in data:
-                  raise SystemExit(f'Migration must be <=256 KiB and use LF: {name}')
-              data.decode('utf-8', errors='strict')
-          PY
-          docker exec -e MYSQL_PWD=ci-root-password "$MYSQL_CONTAINER" mysql -uroot \
-            -e "CREATE USER 'migration_ci'@'localhost' IDENTIFIED BY 'ci-migration-password'; GRANT SELECT, INSERT, CREATE, ALTER, INDEX, REFERENCES, SHOW VIEW, TRIGGER ON \`migration\\_test\`.* TO 'migration_ci'@'localhost';"
-          mysql_ci=(docker exec -i -e MYSQL_PWD=ci-migration-password "$MYSQL_CONTAINER" mysql --binary-mode --local-infile=0 --batch --raw --skip-column-names -umigration_ci migration_test)
-          for file in deploy/migrations/*.sql; do
-            [[ "$file" == *.verify.sql ]] && continue
-            "${mysql_ci[@]}" < "$file"
-            result="$("${mysql_ci[@]}" < "${file%.sql}.verify.sql")"
-            if [[ "$result" != 1 ]]; then echo "Migration verification failed for $file"; exit 1; fi
-          done
-
   package:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -87,78 +19,37 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deploy: ${{ steps.detect.outputs.deploy }}
-      build: ${{ steps.detect.outputs.build }}
-      migrations: ${{ steps.detect.outputs.migrations }}
       artifact_key: ${{ steps.package.outputs.artifact_key }}
       sha256: ${{ steps.package.outputs.sha256 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
-
-      - name: Detect committed site or migration inputs
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          site=false
-          build=false
-          migrations=false
-          if git ls-files --error-unmatch deploy/build.sh >/dev/null 2>&1; then
-            site=true
-            build=true
-          elif git ls-files --error-unmatch deploy/site/index.html >/dev/null 2>&1; then
-            site=true
-          fi
-          if git ls-files --error-unmatch ':(glob)deploy/migrations/**' >/dev/null 2>&1; then
-            migrations=true
-          fi
-          printf 'build=%s\nmigrations=%s\n' "$build" "$migrations" >> "$GITHUB_OUTPUT"
-          if [[ "$migrations" == false ]]; then
-            echo 'MySQL migration skipped. No committed migration files.' | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
-          if [[ "$site" == true || "$migrations" == true ]]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo 'Deployment skipped. No committed site or migrations.' | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Run committed static build script
-        if: steps.detect.outputs.build == 'true' && steps.detect.outputs.deploy == 'true'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.4'
+          cache: pip
+          cache-dependency-path: deploy/site/requirements.txt
+      - name: Install, test, and package the runtime
+        id: package
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ''
-          AWS_SECRET_ACCESS_KEY: ''
-          AWS_SESSION_TOKEN: ''
-          AWS_WEB_IDENTITY_TOKEN_FILE: ''
+          DJANGO_SECRET_KEY: test-only-warehouse-key-for-ci
+          DJANGO_DEBUG: 'false'
         run: |
           set -euo pipefail
-          test -f deploy/build.sh
-          bash deploy/build.sh
-          test -f deploy/site/index.html
-
-      - name: Package bounded static artifact
-        id: package
-        if: steps.detect.outputs.deploy == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 "${GITHUB_WORKSPACE}/.github/scripts/package_site.py" \
-            --slug 'kchospital' --repository-id '1425166838' \
-            --revision "$GITHUB_SHA" --ref "$GITHUB_REF" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --out artifact/site.tar.gz
-          sha="$(sha256sum artifact/site.tar.gz | cut -d ' ' -f 1)"
-          key="paid-sites/kchospital/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz"
+          runtime="$RUNNER_TEMP/ust-runtime"
+          mkdir -p "$runtime/app" "$runtime/vendor" "$runtime/static"
+          python -m pip install --only-binary=:all: --no-compile --target "$runtime/vendor" -r deploy/site/requirements.txt
+          export PYTHONPATH="$runtime/vendor"
+          python -m unittest discover -s deploy/site -p "test*.py"
+          cp -R deploy/site/app.py deploy/site/schema.sql deploy/site/templates deploy/site/static "$runtime/app/"
+          python .github/scripts/package_webapp.py --root "$runtime" --out artifact/site.tar.gz --project kchospital --repository-id 1425166838 --revision "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          sha="$(sha256sum artifact/site.tar.gz | cut -d " " -f 1)"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
-          echo "artifact_key=$key" >> "$GITHUB_OUTPUT"
-
-      - name: Pass package to isolated deploy job
-        if: steps.detect.outputs.deploy == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          echo "artifact_key=paid-sites/kchospital/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo 'Database initialization is managed separately for this app release.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: paid-site-package-${{ github.run_attempt }}
           path: artifact/site.tar.gz
@@ -166,8 +57,8 @@ jobs:
           retention-days: 1
 
   deploy:
-    needs: [package, validate-migrations]
-    if: ${{ !cancelled() && needs.package.result == 'success' && needs.package.outputs.deploy == 'true' && ((needs.package.outputs.migrations == 'true' && needs.validate-migrations.result == 'success') || (needs.package.outputs.migrations == 'false' && needs.validate-migrations.result == 'skipped')) }}
+    needs: package
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
