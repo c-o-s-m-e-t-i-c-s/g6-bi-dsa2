@@ -18,6 +18,19 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: kc-ci-root
+          MYSQL_DATABASE: 2026_3dsa_6_kchospital
+          MYSQL_USER: kc_ci
+          MYSQL_PASSWORD: kc-ci-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pkc-ci-root"
+          --health-interval=5s --health-timeout=5s --health-retries=25
     outputs:
       artifact_key: ${{ steps.package.outputs.artifact_key }}
       sha256: ${{ steps.package.outputs.sha256 }}
@@ -34,8 +47,18 @@ jobs:
         id: package
         shell: bash
         env:
-          DJANGO_SECRET_KEY: test-only-warehouse-key-for-ci
-          DJANGO_DEBUG: 'false'
+          MYSQL_INTEGRATION_TEST: '1'
+          BOOTSTRAP_DB_HOST: 127.0.0.1
+          BOOTSTRAP_DB_PORT: '3306'
+          BOOTSTRAP_DB_NAME: 2026_3dsa_6_kchospital
+          BOOTSTRAP_DB_USER: kc_ci
+          BOOTSTRAP_DB_PASSWORD: kc-ci-password
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_NAME: 2026_3dsa_6_kchospital
+          DB_USER: kc_ci
+          DB_PASSWORD: kc-ci-password
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
         run: |
           set -euo pipefail
           runtime="$RUNNER_TEMP/ust-runtime"
@@ -43,12 +66,19 @@ jobs:
           python -m pip install --only-binary=:all: --no-compile --target "$runtime/vendor" -r deploy/site/requirements.txt
           export PYTHONPATH="$runtime/vendor"
           python -m unittest discover -s deploy/site -p "test*.py"
-          cp -R deploy/site/app.py deploy/site/schema.sql deploy/site/templates deploy/site/static "$runtime/app/"
+          shopt -s nullglob
+          mysql_ci=(docker exec -i -e MYSQL_PWD=kc-ci-password "$MYSQL_CONTAINER" mysql --binary-mode --local-infile=0 --batch --raw --skip-column-names -ukc_ci "$DB_NAME")
+          for file in deploy/migrations/*.sql; do
+            [[ "$file" == *.verify.sql ]] && continue
+            "${mysql_ci[@]}" < "$file"
+            [[ "$("${mysql_ci[@]}" < "${file%.sql}.verify.sql")" == 1 ]]
+          done
+          cp -R deploy/site/app.py deploy/site/mysql_store.py deploy/site/bootstrap_mysql.py deploy/site/seed_data.py \
+            deploy/site/migrations deploy/site/templates deploy/site/static "$runtime/app/"
           python .github/scripts/package_webapp.py --root "$runtime" --out artifact/site.tar.gz --project kchospital --repository-id 1425166838 --revision "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           sha="$(sha256sum artifact/site.tar.gz | cut -d " " -f 1)"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
           echo "artifact_key=paid-sites/kchospital/${GITHUB_SHA}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tar.gz" >> "$GITHUB_OUTPUT"
-          echo 'Database initialization is managed separately for this app release.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: paid-site-package-${{ github.run_attempt }}

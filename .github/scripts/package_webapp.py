@@ -6,7 +6,27 @@ import json
 from pathlib import Path
 import re
 import stat
+import subprocess
 import tarfile
+
+
+def committed_migrations(revision):
+    paths = subprocess.check_output(
+        ['git', 'ls-tree', '-r', '--name-only', revision, '--', 'deploy/migrations'], text=True
+    ).splitlines()
+    if len(paths) > 100:
+        raise SystemExit('Too many migration files')
+    files = {}
+    for path in paths:
+        name = Path(path).name
+        if path != f'deploy/migrations/{name}' or not re.fullmatch(
+                r'(?!0000)[0-9]{4}_[a-z][a-z0-9_]{0,59}(?:\.verify)?\.sql', name):
+            raise SystemExit(f'Invalid migration path: {path}')
+        data = subprocess.check_output(['git', 'show', f'{revision}:{path}'])
+        if not 0 < len(data) <= 256 * 1024 or Path(path).read_bytes() != data:
+            raise SystemExit(f'Invalid migration content: {path}')
+        files[name] = data
+    return files
 
 
 def main():
@@ -19,6 +39,9 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     manifest = dict(format=2, project=args.project, repository_id=args.repository_id,
                     revision=args.revision, ref='refs/heads/main', run_id=args.run_id, run_attempt=args.run_attempt)
+    migrations = committed_migrations(args.revision) if args.project == 'kchospital' else {}
+    if migrations:
+        manifest['migration_files'] = {name: hashlib.sha256(data).hexdigest() for name, data in migrations.items()}
     contents = json.dumps(manifest, sort_keys=True).encode()
     total = 0
     count = 0
@@ -26,6 +49,10 @@ def main():
         info = tarfile.TarInfo('manifest.json')
         info.size, info.mode = len(contents), 0o644
         archive.addfile(info, io.BytesIO(contents))
+        for name, data in migrations.items():
+            info = tarfile.TarInfo(f'migrations/{name}')
+            info.size, info.mode = len(data), 0o644
+            archive.addfile(info, io.BytesIO(data))
         for path in sorted(root.rglob('*')):
             relative = path.relative_to(root).as_posix()
             if any(part.startswith('.') or part == '__pycache__' for part in relative.split('/')):

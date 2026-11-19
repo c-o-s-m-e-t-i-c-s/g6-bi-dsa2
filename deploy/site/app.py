@@ -1,4 +1,6 @@
-import os, re, sqlite3, random, secrets, hashlib
+import os, re, secrets, hashlib
+import pymysql
+from mysql_store import Database, SCHEMA, connection_options, verify_schema
 from pathlib import Path
 from contextlib import closing
 import click
@@ -13,14 +15,11 @@ PRODUCTION = os.environ.get('APP_ENV') == 'production'
 app.secret_key = os.environ.get("SECRET_KEY", "dev-change-me")
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=PRODUCTION, PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
-DB = os.environ.get("DATABASE", os.path.join(os.path.dirname(__file__), "kacchan.db"))
 STAFF_PASSWORD_HASHES = {str(i): os.environ.get(f'STAFF_PASSWORD_HASH_{i}', '') for i in range(1, 5)}
 if PRODUCTION:
     if len(app.secret_key) < 32:
         raise RuntimeError('Production SECRET_KEY must contain at least 32 characters.')
-    path = Path(DB)
-    if not path.is_absolute() or path.resolve().is_relative_to(Path(__file__).resolve().parent):
-        raise RuntimeError('Production DATABASE must be an absolute SQLite path outside the release site.')
+    connection_options()  # Validate schema, private credentials and TLS without connecting.
     if any(not value.startswith(('scrypt:', 'pbkdf2:')) or value.count('$') != 2
            for value in STAFF_PASSWORD_HASHES.values()):
         raise RuntimeError('Configure individual Werkzeug STAFF_PASSWORD_HASH_1 through _4 values.')
@@ -28,83 +27,34 @@ if PRODUCTION:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 
 
-def database_uri(mode='rw'):
-    return Path(DB).resolve().as_uri() + '?mode=' + mode
-
 def db():
     if "db" not in g:
-        g.db = sqlite3.connect(database_uri(), uri=True, timeout=8); g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys=ON")
+        g.db = Database()
     return g.db
+
+
 @app.teardown_appcontext
 def close(_):
-    d = g.pop("db", None)
-    if d: d.close()
-
-def init_db():
-    with closing(sqlite3.connect(DB)) as c:
-        c.execute('PRAGMA foreign_keys=ON')
-        c.executescript(Path(__file__).with_name('schema.sql').read_text())
-        if c.execute("SELECT COUNT(*) FROM patient").fetchone()[0] == 0:
-            seed(c)
-        c.commit()
+    connection = g.pop("db", None)
+    if connection:
+        connection.close()
 
 
-@app.cli.command('init-demo-db')
-@click.option('--confirm-synthetic', is_flag=True, required=True,
-              help='Create a new isolated database using fictional demonstration records.')
-def init_demo_db(confirm_synthetic):
-    """Initialize once, refusing to overwrite any existing database."""
+@app.cli.command('seed-demo-data')
+@click.option('--confirm-schema', required=True, type=click.Choice([SCHEMA]))
+@click.option('--confirm-synthetic', is_flag=True, required=True)
+def seed_demo_data(confirm_schema, confirm_synthetic):
+    """Populate an initialized but completely empty project schema, once."""
     if not confirm_synthetic:
-        raise click.ClickException('Explicit synthetic initialization is required.')
-    path = Path(DB)
-    if not path.parent.is_dir():
-        raise click.ClickException('Create the private persistent parent directory first.')
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(descriptor)
-    except FileExistsError:
-        raise click.ClickException('Database already exists; initialization refuses to overwrite it.')
-    try:
-        init_db()
-    except Exception:
-        raise click.ClickException('Initialization failed; inspect the new private file before retrying.')
-    click.echo('Initialized new isolated SQLite database with synthetic demonstration records.')
+        raise click.ClickException('Explicit synthetic confirmation is required.')
+    from bootstrap_mysql import seed_database
+    with closing(Database('BOOTSTRAP_DB_')) as connection:
+        seed_database(connection)
+    click.echo('Seeded explicitly synthetic demo data in the confirmed project MySQL schema.')
 
-def seed(c):  # fictional sample data only
-    r = random.Random(7)
-    depts = ["Cardiology","Respiratory","Neurology","Gastroenterology","Dermatology","Orthopedics","Emergency","Pediatrics"]
-    for d in depts: c.execute("INSERT INTO department(name) VALUES(?)", (d,))
-    for n, role, d in [("Ana Reyes","Admin",1),("Ben Cruz","Staff",2),("Carla Dizon","Staff",3),("Dan Lopez","Admin",7)]:
-        c.execute("INSERT INTO staff(full_name,role,department_id) VALUES(?,?,?)", (n, role, d))
-    first = ["Mia","Leo","Ivy","Noel","Tess","Raf","Joy","Kai","Lena","Omar","Pia","Sam"]; last = ["Santos","Garcia","Tan","Lim","Bautista","Aquino","Ramos","Flores","Mendoza","Navarro"]
-    dx = ["Renal","Psych","Addict","Oral","Allgy","Trauma","Urinary","Cardiac","Resp","Derm","Ortho","Neuro"]
-    dxw = [600,550,470,455,425,372,340,250,225,140,120,110]
-    tx = ["Cardio","Respir","Neuro","Gastro","Derma","Ortho","Onco","Renal"]
-    for i in range(400):
-        by = r.choice([2015,2008,1995,1985,1975,1960,1950,1990,2000])
-        nm = f"{r.choice(first)} {r.choice('ABCDEFGHJKLMNPRST')}. {r.choice(last)} {i}"
-        c.execute("INSERT INTO patient(code,full_name,birthdate,sex,contact,insurance,created_by) VALUES(?,?,?,?,?,?,1)",
-          (f"PT-{i+1:06d}", nm, f"{by-r.randint(0,9)}-{r.randint(1,12):02d}-{r.randint(1,28):02d}", r.choice(["Male","Male","Female","Female","Female"]),
-           "09"+"".join(r.choice("0123456789") for _ in range(9)), r.choice(["PhilHealth","Maxicare","Intellicare","None"])))
-    for i in range(1500):
-        d = date(2026,1,1)+timedelta(days=r.randint(0,300)); pid = r.randint(1,400)
-        c.execute("INSERT INTO visit(patient_id,department_id,visit_date,wait_min,stay_hours,diagnosis,readmitted) VALUES(?,?,?,?,?,?,?)",
-          (pid, r.randint(1,8), d.isoformat(), r.randint(3,25), round(r.uniform(.5,72),1), r.choices(dx,dxw)[0], int(r.random()<.067)))
-        vid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-        if r.random()<.7: c.execute("INSERT INTO treatment(visit_id,name,status) VALUES(?,?,?)", (vid, r.choices(tx,[9,8,6,5,4,3,2,1])[0], r.choices(["Completed","Partially Completed","On Hold","Failed"],[5,3,2,1])[0]))
-        amt = round(r.uniform(500,25000),2)
-        c.execute("INSERT INTO invoice(patient_id,visit_id,amount,paid,issued) VALUES(?,?,?,?,?)", (pid, vid, amt, amt if r.random()<.75 else round(amt*r.random(),2), d.isoformat()))
-        c.execute("INSERT INTO appointment(patient_id,staff_id,appt_date,type,status) VALUES(?,?,?,?,?)", (pid, r.randint(1,4), d.isoformat(), r.choice(["Treatment","Diagnosis","Diagnosis"]),
-          r.choices(["Completed","Scheduled","Cancelled","No-show"],[80,8,6,6])[0]))
-    for v in ["MedSupply Co.","PharmaOne","SteriCare","BioEquip"]:
-        for m in range(1,10):
-            a = round(r.uniform(20000,90000),2); c.execute("INSERT INTO vendor_bill(vendor,amount,paid,issued) VALUES(?,?,?,?)", (v,a,a if r.random()<.7 else 0,f"2026-{m:02d}-15"))
-    for n,cat in [("Gloves (box)","Consumables"),("Syringes 5ml","Consumables"),("IV Sets","Consumables"),("Paracetamol 500mg","Pharmacy"),("Amoxicillin 500mg","Pharmacy"),("Surgical Masks","PPE"),("Gauze Rolls","Consumables"),("Oxygen Tanks","Equipment"),("Saline 1L","Pharmacy"),("Wheelchairs","Equipment")]:
-        lv = r.randint(30,120); c.execute("INSERT INTO supply(name,category,stock,reorder_level,unit_cost) VALUES(?,?,?,?,?)", (n,cat,r.randint(5,400),lv,round(r.uniform(10,900),2)))
 
 def audit(action, detail=""):
-    db().execute("INSERT INTO audit_log(staff_id,action,detail) VALUES(?,?,?)", (session.get("uid"), action, detail)); db().commit()
+    db().execute("INSERT INTO audit_log(staff_id,action,detail) VALUES(%s,%s,%s)", (session.get("uid"), action, detail)); db().commit()
 
 def login_required(admin=False):
     def deco(f):
@@ -153,7 +103,7 @@ def home():
 
 def parse_patient(f):
     errs = {}; name = " ".join(f.get("full_name", "").split())
-    if len(name) < 3 or not re.fullmatch(r"[A-Za-zÀ-ÿ.\-' ]+", name): errs["full_name"] = "Enter a valid full name."
+    if not 3 <= len(name) <= 255 or not re.fullmatch(r"[A-Za-zÀ-ÿ.\-' ]+", name): errs["full_name"] = "Enter a valid full name (3–255 characters)."
     try:
         bd = datetime.strptime(f.get("birthdate", "").strip(), "%m/%d/%Y").date()
         if bd > date.today() or bd.year < 1900: raise ValueError
@@ -170,12 +120,13 @@ def add_patient():
         errs, name, bd, ct = parse_patient(form)
         if not errs:
             try:
-                cur = db().execute("INSERT INTO patient(full_name,birthdate,contact,insurance,created_by) VALUES(?,?,?,?,?)",
+                cur = db().execute("INSERT INTO patient(full_name,birthdate,contact,insurance,created_by) VALUES(%s,%s,%s,%s,%s)",
                     (name, bd.isoformat(), ct, form.get("insurance", "").strip()[:80] or "None", session["uid"]))
-                db().execute("UPDATE patient SET code=? WHERE id=?", (f"PT-{cur.lastrowid:06d}", cur.lastrowid)); db().commit()
+                db().execute("UPDATE patient SET code=%s WHERE id=%s", (f"PT-{cur.lastrowid:06d}", cur.lastrowid)); db().commit()
                 audit("patient_created", f"PT-{cur.lastrowid:06d}")
                 flash(f"Record saved. Patient ID: PT-{cur.lastrowid:06d}", "ok"); return redirect(request.form.get("back") or url_for("add_patient"))
-            except sqlite3.IntegrityError:
+            except pymysql.IntegrityError:
+                db().rollback()
                 errs["full_name"] = "A patient with this name and birthdate already exists."
         flash("Please fix the highlighted fields.", "err")
     return render_template("add_patient.html", form=form, errs=errs, page="add")
@@ -187,19 +138,19 @@ def dashboard():
     if view not in ("overview", "finance", "operations", "inventory", "treatment"): abort(404)
     if view in ("finance", "inventory") and session["role"] != "Admin": abort(403)
     year = request.args.get("year", "2026"); month = request.args.get("month", "All"); dept = request.args.get("dept", "All")
-    w, p = ["strftime('%Y',v.visit_date)=?"], [year]
-    if month != "All" and month.isdigit(): w.append("strftime('%m',v.visit_date)=?"); p.append(f"{int(month):02d}")
-    if dept != "All" and dept.isdigit(): w.append("v.department_id=?"); p.append(int(dept))
+    w, p = ["LEFT(v.visit_date,4)=%s"], [year]
+    if month != "All" and month.isdigit(): w.append("SUBSTRING(v.visit_date,6,2)=%s"); p.append(f"{int(month):02d}")
+    if dept != "All" and dept.isdigit(): w.append("v.department_id=%s"); p.append(int(dept))
     W = " AND ".join(w); q = lambda s, *x: db().execute(s, p + list(x)).fetchall(); s1 = lambda s: (db().execute(s, p).fetchone()[0] or 0)
     d = dict(view=view, year=year, month=month, dept=dept, depts=db().execute("SELECT * FROM department").fetchall())
     d.update(visits=s1(f"SELECT COUNT(*) FROM visit v WHERE {W}"), wait=round(s1(f"SELECT AVG(wait_min) FROM visit v WHERE {W}")),
       los=round(s1(f"SELECT AVG(stay_hours) FROM visit v WHERE {W}"), 1), readm=round(100*s1(f"SELECT AVG(readmitted) FROM visit v WHERE {W}"), 1),
-      noshow=round(100*one("SELECT AVG(status IN('Cancelled','No-show')) FROM appointment WHERE strftime('%Y',appt_date)=?", year), 1),
+      noshow=round(100*one("SELECT AVG(status IN('Cancelled','No-show')) FROM appointment WHERE LEFT(appt_date,4)=%s", year), 1),
       comp=round(100*s1(f"SELECT AVG(t.status='Completed') FROM treatment t JOIN visit v ON v.id=t.visit_id WHERE {W}")),
       ar=s1(f"SELECT SUM(i.amount-i.paid) FROM invoice i JOIN visit v ON v.id=i.visit_id WHERE {W}"), ap=one("SELECT SUM(amount-paid) FROM vendor_bill"))
     d["sex"] = {r[0]: r[1] for r in q(f"SELECT p.sex,COUNT(*) FROM visit v JOIN patient p ON p.id=v.patient_id WHERE {W} GROUP BY 1")}
     d["dx"] = [tuple(r) for r in q(f"SELECT diagnosis,COUNT(*) c FROM visit v WHERE {W} GROUP BY 1 ORDER BY c DESC")]
-    d["trend"] = [tuple(r) for r in q(f"SELECT strftime('%m',visit_date),COUNT(*) FROM visit v WHERE {W} GROUP BY 1 ORDER BY 1")]
+    d["trend"] = [tuple(r) for r in q(f"SELECT SUBSTRING(visit_date,6,2),COUNT(*) FROM visit v WHERE {W} GROUP BY 1 ORDER BY 1")]
     d["appt"] = {r[0]: r[1] for r in db().execute("SELECT type,COUNT(*) FROM appointment GROUP BY 1")}
     tr = {}
     for n, s, c in q(f"SELECT t.name,t.status,COUNT(*) FROM treatment t JOIN visit v ON v.id=t.visit_id WHERE {W} GROUP BY 1,2"): tr.setdefault(n, {})[s] = c
@@ -210,7 +161,7 @@ def dashboard():
         a = int(year) - int(bd[:4]); ages[0 if a < 13 else 1 if a < 18 else 2 if a < 40 else 3 if a < 60 else 4] += 1
     d["ages"] = list(zip(["Child 0-12", "Teen 13-17", "Adult 18-39", "Age 40-59", "Senior 60+"], ages))
     if view == "finance":
-        d["monthly"] = [(r[0], round(r[1])) for r in q(f"SELECT strftime('%m',v.visit_date),SUM(i.amount) FROM invoice i JOIN visit v ON v.id=i.visit_id WHERE {W} GROUP BY 1 ORDER BY 1")]
+        d["monthly"] = [(r[0], round(r[1])) for r in q(f"SELECT SUBSTRING(v.visit_date,6,2),SUM(i.amount) FROM invoice i JOIN visit v ON v.id=i.visit_id WHERE {W} GROUP BY 1 ORDER BY 1")]
         d["vendors"] = db().execute("SELECT vendor,SUM(amount) a,SUM(amount-paid) o FROM vendor_bill GROUP BY 1").fetchall()
     if view == "inventory": d["supplies"] = db().execute("SELECT * FROM supply ORDER BY stock*1.0/reorder_level").fetchall()
     if view == "operations":
@@ -228,32 +179,18 @@ def contact(): return render_template("contact.html", page="contact")
 def health():
     """Read-only database readiness without returning records or counts."""
     try:
-        with closing(sqlite3.connect(database_uri('ro'), uri=True, timeout=3)) as connection:
-            if connection.execute('PRAGMA quick_check(1)').fetchone()[0] != 'ok':
-                return {'status': 'database_unavailable'}, 503
-            projections = {
-                'department': 'id,name',
-                'staff': 'id,full_name,role,department_id,active',
-                'patient': 'id,code,full_name,birthdate,sex,contact,insurance,created_by,archived,created_at',
-                'visit': 'id,patient_id,department_id,visit_date,wait_min,stay_hours,diagnosis,readmitted',
-                'appointment': 'id,patient_id,staff_id,appt_date,type,status',
-                'treatment': 'id,visit_id,name,status',
-                'invoice': 'id,patient_id,visit_id,amount,paid,issued',
-                'vendor_bill': 'id,vendor,amount,paid,issued',
-                'supply': 'id,name,category,stock,reorder_level,unit_cost',
-                'audit_log': 'id,staff_id,action,detail,at',
-            }
-            for table, columns in projections.items():
-                connection.execute(f'SELECT {columns} FROM {table} WHERE 1=0')
+        with closing(Database()) as connection:
+            connection.execute('START TRANSACTION READ ONLY')
+            verify_schema(connection)
         return {'status': 'ok'}
-    except sqlite3.Error:
+    except (pymysql.Error, RuntimeError):
         return {'status': 'database_unavailable'}, 503
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     f = request.form if request.method == "POST" else {}
     if request.method == "POST":
-        row = db().execute("SELECT * FROM staff WHERE id=? AND department_id=? AND role=? AND lower(full_name)=lower(?) AND active=1",
+        row = db().execute("SELECT * FROM staff WHERE id=%s AND department_id=%s AND role=%s AND lower(full_name)=lower(%s) AND active=1",
             (f.get("staff_id", "").strip() or 0, f.get("department_id", "").strip() or 0, f.get("role", "").strip().title(), " ".join(f.get("full_name", "").split()))).fetchone() \
             if f.get("staff_id", "").strip().isdigit() and f.get("department_id", "").strip().isdigit() else None
         password_hash = STAFF_PASSWORD_HASHES.get(str(row['id']), '') if row else ''
@@ -271,6 +208,4 @@ def login():
 @app.route("/logout", methods=["POST"])
 def logout(): session.clear(); flash("You have been logged out.", "ok"); return redirect(url_for("home"))
 
-if not PRODUCTION:
-    init_db()
 if __name__ == "__main__": app.run(debug=os.environ.get("FLASK_DEBUG") == "1")

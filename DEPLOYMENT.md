@@ -1,12 +1,8 @@
 # Production deployment
 
-The [Deploy paid site](https://github.com/c-o-s-m-e-t-i-c-s/g6-bi-dsa2/actions/workflows/paid-site.yml) workflow runs on pushes to `main`. It skips deployment until a static site, a build script, or a reviewed migration pair is committed:
+KC Hospital runs as a Flask service on the shared UST EC2 instance behind HTTPS at `kchospital.space` and `www.kchospital.space`. It uses the existing RDS schema `2026_3dsa_6_kchospital` through a TLS connection with a dedicated account. Staff passwords and application settings are stored privately on EC2.
 
-- `deploy/site/index.html` and the assets for a static site.
-- `deploy/build.sh`, a Bash script that installs locked dependencies if needed, runs the project's tests and build, and writes the final static site to `deploy/site/`. It must exit with an error if a required check fails.
-- `deploy/migrations/0001_create_orders.sql` and `deploy/migrations/0001_create_orders.verify.sql`, or the next contiguous number for later schema changes. Migration-only pushes can run before a site is available.
-
-Include only files intended to be public in `deploy/site/`. Keep environment files, database files, credentials, and original datasets outside that directory. Use a backend deployment configuration if the project needs a server-side runtime or database connection.
+The [Deploy web app](https://github.com/c-o-s-m-e-t-i-c-s/g6-bi-dsa2/actions/workflows/paid-site.yml) workflow runs on pushes to `main`. It installs the pinned Python dependencies, tests Flask against isolated MySQL 8.4, and packages only the application runtime. See [the app setup](deploy/site/README.md) for the one-time additive baseline and fictional demo data. Later reviewed migrations go in `deploy/migrations/`.
 
 ## MySQL migrations
 

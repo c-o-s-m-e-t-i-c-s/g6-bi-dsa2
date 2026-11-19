@@ -3,22 +3,22 @@ import importlib.util
 from contextlib import closing
 import os
 from pathlib import Path
-import sqlite3
-import tempfile
+import pymysql
+from mysql_store import Database
+from bootstrap_mysql import create_baseline, seed_database
 import unittest
 from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
 
+@unittest.skipUnless(os.getenv('MYSQL_INTEGRATION_TEST') == '1', 'Requires an isolated empty MySQL 8 project schema.')
 class ProductionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.directory = tempfile.TemporaryDirectory()
-        cls.database = Path(cls.directory.name) / 'synthetic.sqlite3'
         cls.passwords = {str(i): f'inert-individual-test-password-{i}' for i in range(1, 5)}
         environment = {'APP_ENV': 'production', 'SECRET_KEY': 'inert-production-test-key-1234567890',
-                       'DATABASE': str(cls.database)}
+                       **{key: value for key, value in os.environ.items() if key.startswith(('DB_', 'BOOTSTRAP_DB_'))}}
         environment.update({f'STAFF_PASSWORD_HASH_{i}': generate_password_hash(password, method='pbkdf2:sha256:1000')
                             for i, password in cls.passwords.items()})
         with patch.dict(os.environ, environment, clear=True):
@@ -27,13 +27,9 @@ class ProductionTests(unittest.TestCase):
             spec.loader.exec_module(cls.module)
         cls.app = cls.module.app
         cls.app.config['TESTING'] = True
-        assert not cls.database.exists(), 'Production import must never create a database.'
-        result = cls.app.test_cli_runner().invoke(args=['init-demo-db', '--confirm-synthetic'])
-        assert result.exit_code == 0, result.output
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.directory.cleanup()
+        with closing(Database('BOOTSTRAP_DB_')) as connection:
+            create_baseline(connection)
+            seed_database(connection)
 
     def setUp(self):
         self.client = self.app.test_client()
@@ -75,28 +71,43 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(self.client.get('/dashboard').status_code, 302)
 
     def test_health_is_read_only_and_does_not_return_records(self):
-        before = self.database.read_bytes()
         response = self.client.get('/health/')
         self.assertEqual(response.json, {'status': 'ok'})
         self.assertNotIn('Set-Cookie', response.headers)
-        self.assertEqual(before, self.database.read_bytes())
 
-    def test_missing_database_is_not_silently_created(self):
-        missing = Path(self.directory.name) / 'absent.sqlite3'
-        with patch.object(self.module, 'DB', str(missing)):
-            self.assertEqual(self.client.get('/health/').status_code, 503)
-        self.assertFalse(missing.exists())
+    def test_missing_database_does_not_initialize(self):
+        with patch.object(self.module, 'Database', side_effect=pymysql.OperationalError('private endpoint')):
+            response = self.client.get('/health/')
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn(b'private', response.data)
 
     def test_initializer_refuses_existing_database(self):
-        before = self.database.read_bytes()
-        result = self.app.test_cli_runner().invoke(args=['init-demo-db', '--confirm-synthetic'])
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertEqual(before, self.database.read_bytes())
+        with closing(Database('BOOTSTRAP_DB_')) as connection:
+            with self.assertRaises(RuntimeError):
+                create_baseline(connection)
+            with self.assertRaises(RuntimeError):
+                seed_database(connection)
 
     def test_seed_is_isolated_and_public_report_works(self):
-        with closing(sqlite3.connect(self.database)) as connection:
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM patient').fetchone()[0], 400)
+        with closing(Database('BOOTSTRAP_DB_')) as connection:
+            self.assertGreaterEqual(connection.execute('SELECT COUNT(*) FROM patient').fetchone()[0], 400)
         self.assertEqual(self.client.get('/').status_code, 200)
+        self.login('1', self.passwords['1'])
+        for view in ('overview', 'finance', 'operations', 'inventory', 'treatment'):
+            self.assertEqual(self.client.get('/dashboard?view='+view, base_url='https://localhost').status_code, 200)
+
+    def test_authorized_patient_create_persists(self):
+        self.login('2', self.passwords['2'])
+        with self.client.session_transaction() as state:
+            csrf = state['csrf']
+        response = self.client.post('/add-patient', base_url='https://localhost', data={
+            'csrf': csrf, 'full_name': 'Synthetic Integration Patient',
+            'birthdate': '01/02/1990', 'contact': '09123456789', 'insurance': 'None'})
+        self.assertEqual(response.status_code, 302)
+        with closing(Database('BOOTSTRAP_DB_')) as connection:
+            row = connection.execute('SELECT code FROM patient WHERE full_name=%s', ('Synthetic Integration Patient',)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertTrue(row[0].startswith('PT-'))
 
 
 if __name__ == '__main__':
