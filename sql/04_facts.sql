@@ -40,7 +40,7 @@ TABLE OF CONTENTS: (use Ctrl + F to find tables faster)
 -- MAIN FACT TABLES (Drop first due to FK dependencies)
 DROP TABLE IF EXISTS fact_vendor_payment;
 DROP TABLE IF EXISTS fact_supply_receipt;
-DROP TABLE IF EXISTS fact_inventory;
+-- DROP TABLE IF EXISTS fact_inventory; commented out since i  dont want to rebuild 9.5 million rows
 DROP TABLE IF EXISTS fact_payment;
 DROP TABLE IF EXISTS fact_medbill;
 DROP TABLE IF EXISTS fact_billing;
@@ -255,6 +255,7 @@ FROM (
            (SELECT COUNT(*) FROM dim_visit_type) AS found,
            (SELECT COUNT(DISTINCT VTYPE_CD) FROM stg_visit WHERE VTYPE_CD IS NOT NULL) AS expected
 ) t;
+
 
 -- ==========================================================================================
 -- fact_visit
@@ -1046,6 +1047,7 @@ FROM (
 -- 4. INVENTORY AND PROCUREMENT
 -- =============================================
 
+/* COMMENTED DUE TO 9.5 MILLION ROWS, ETA: ~6 HOURS TO RUN, SEE README.MD IN ./sql/
 -- ==========================================================================================
 -- fact_inventory
 -- Source: stg_inventory | Grain: One daily inventory record per SKU
@@ -1079,51 +1081,161 @@ CREATE INDEX fact_inventory_ix_1 ON fact_inventory(inventory_key);
 CREATE INDEX fact_inventory_ix_2 ON fact_inventory(ingestion_date_key);
 CREATE INDEX fact_inventory_ix_3 ON fact_inventory(received_by_staff_key);
 
--- Populate fact
-INSERT INTO fact_inventory (
-    inventory_key,
-    ingestion_date_key,
-    opened_by_staff_key,
-    received_by_staff_key,
-    issued_by_staff_key,
-    closed_by_staff_key,
-    verified_by_staff_key,
-    ingestion_timestamp,
-    opening_qty,
-    received_qty,
-    issued_qty,
-    closing_qty
-)
-SELECT
-    inv.inventory_key,
-    dt.date_key AS ingestion_date_key,
-    COALESCE(opn_res.staff_key_default, -1) AS opened_by_staff_key,
-    COALESCE(rcv_res.staff_key_default, -1) AS received_by_staff_key,
-    COALESCE(iss_res.staff_key_default, -1) AS issued_by_staff_key,
-    COALESCE(cls_res.staff_key_default, -1) AS closed_by_staff_key,
-    COALESCE(vrf_res.staff_key_default, -1) AS verified_by_staff_key,
-    s.ING_TS AS ingestion_timestamp,
-    s.OPN_QTY,
-    s.RCVD_QTY,
-    s.ISS_QTY,
-    s.CLS_QTY
-FROM stg_inventory s
-JOIN dim_inventory inv
-    ON s.MAT_SKU = inv.material_sku
-JOIN dim_date dt
-    ON DATE(s.ING_TS) = dt.full_date
-LEFT JOIN bridge_staff_id_resolution opn_res
-    ON TRIM(s.OPN_STF) = TRIM(opn_res.staff_id)
-LEFT JOIN bridge_staff_id_resolution rcv_res
-    ON TRIM(s.RCVD_STF) = TRIM(rcv_res.staff_id)
-LEFT JOIN bridge_staff_id_resolution iss_res
-    ON TRIM(s.ISS_STF) = TRIM(iss_res.staff_id)
-LEFT JOIN bridge_staff_id_resolution cls_res
-    ON TRIM(s.CLS_STF) = TRIM(cls_res.staff_id)
-LEFT JOIN bridge_staff_id_resolution vrf_res
-    ON TRIM(s.VRFC_STF) = TRIM(vrf_res.staff_id);
+-- Needed so each batch reads one file, not all 90.7M rows. Slow once (~minutes).
+CREATE INDEX stg_inventory_ix_src_file ON stg_inventory(src_file);
 
--- Validation
+-- Fact is rebuilt from scratch on every full load, so a rerun cannot duplicate rows.
+TRUNCATE TABLE fact_inventory;
+
+DROP PROCEDURE IF EXISTS load_fact_inventory;
+DELIMITER $$
+CREATE PROCEDURE load_fact_inventory()
+BEGIN
+    DECLARE v_file     VARCHAR(255);
+    DECLARE v_expected BIGINT;
+    DECLARE v_loaded   BIGINT;
+    DECLARE v_done     BOOLEAN DEFAULT FALSE;
+    DECLARE cur CURSOR FOR SELECT DISTINCT src_file FROM stg_inventory ORDER BY src_file;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done = TRUE;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    OPEN cur;
+    batch_loop: LOOP
+        FETCH cur INTO v_file;
+        IF v_done THEN LEAVE batch_loop; END IF;
+
+        SELECT COUNT(*) INTO v_expected FROM stg_inventory WHERE src_file = v_file;
+
+        START TRANSACTION;
+
+        INSERT INTO fact_inventory (
+            inventory_key, ingestion_date_key,
+            opened_by_staff_key, received_by_staff_key, issued_by_staff_key,
+            closed_by_staff_key, verified_by_staff_key,
+            ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+        )
+        SELECT
+            inv.inventory_key,
+            dt.date_key,
+            COALESCE(opn_res.staff_key_default, -1),
+            COALESCE(rcv_res.staff_key_default, -1),
+            COALESCE(iss_res.staff_key_default, -1),
+            COALESCE(cls_res.staff_key_default, -1),
+            COALESCE(vrf_res.staff_key_default, -1),
+            s.INGTN_TS, s.OPEN_QTY, s.RCVD_QTY, s.ISSD_QTY, s.CLSD_QTY
+        FROM stg_inventory s
+        JOIN dim_inventory inv ON s.MAT_SKU = inv.material_sku
+        JOIN dim_date dt       ON DATE(s.INGTN_TS) = dt.full_date
+        LEFT JOIN bridge_staff_id_resolution opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+        WHERE s.src_file = v_file;
+
+        SET v_loaded = ROW_COUNT();
+
+        -- Fewer rows = inner join dropped data. More rows = join fan-out. Both abort and roll back this batch.
+        IF v_loaded <> v_expected THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'fact_inventory batch row count mismatch; see src_file in last progress row';
+        END IF;
+
+        COMMIT;
+    END LOOP;
+    CLOSE cur;
+END$$
+DELIMITER ;
+
+EXPLAIN
+SELECT inv.inventory_key, dt.date_key,
+       opn_res.staff_key_default, rcv_res.staff_key_default,
+       iss_res.staff_key_default, cls_res.staff_key_default,
+       vrf_res.staff_key_default
+FROM stg_inventory s
+JOIN dim_inventory inv ON s.MAT_SKU = inv.material_sku
+JOIN dim_date dt       ON DATE(s.INGTN_TS) = dt.full_date
+LEFT JOIN bridge_staff_id_resolution opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+LEFT JOIN bridge_staff_id_resolution rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+LEFT JOIN bridge_staff_id_resolution iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+LEFT JOIN bridge_staff_id_resolution cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+LEFT JOIN bridge_staff_id_resolution vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+WHERE s.src_file = 'STG_EHP__INVN_1_1.csv';
+
+TRUNCATE TABLE fact_inventory;
+
+DROP PROCEDURE IF EXISTS load_fact_inventory;
+DELIMITER $$
+CREATE PROCEDURE load_fact_inventory()
+BEGIN
+    DECLARE v_file     VARCHAR(255);
+    DECLARE v_expected BIGINT;
+    DECLARE v_loaded   BIGINT;
+    DECLARE v_done     BOOLEAN DEFAULT FALSE;
+    DECLARE cur CURSOR FOR SELECT DISTINCT src_file FROM stg_inventory ORDER BY src_file;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done = TRUE;
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    OPEN cur;
+    batch_loop: LOOP
+        FETCH cur INTO v_file;
+        IF v_done THEN LEAVE batch_loop; END IF;
+
+        SELECT COUNT(*) INTO v_expected FROM stg_inventory WHERE src_file = v_file;
+
+        START TRANSACTION;
+
+        INSERT INTO fact_inventory (
+            inventory_key, ingestion_date_key,
+            opened_by_staff_key, received_by_staff_key, issued_by_staff_key,
+            closed_by_staff_key, verified_by_staff_key,
+            ingestion_timestamp, opening_qty, received_qty, issued_qty, closing_qty
+        )
+        SELECT
+            inv.inventory_key,
+            dt.date_key,
+            COALESCE(opn_res.staff_key_default, -1),
+            COALESCE(rcv_res.staff_key_default, -1),
+            COALESCE(iss_res.staff_key_default, -1),
+            COALESCE(cls_res.staff_key_default, -1),
+            COALESCE(vrf_res.staff_key_default, -1),
+            s.INGTN_TS, s.OPEN_QTY, s.RCVD_QTY, s.ISSD_QTY, s.CLSD_QTY
+        FROM stg_inventory s
+        JOIN dim_inventory inv ON s.MAT_SKU = inv.material_sku
+        JOIN dim_date dt       ON DATE(s.INGTN_TS) = dt.full_date
+        LEFT JOIN bridge_staff_id_resolution opn_res ON TRIM(s.OPEN_STF) = opn_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution rcv_res ON TRIM(s.RCVD_STF) = rcv_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution iss_res ON TRIM(s.ISSD_STF) = iss_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution cls_res ON TRIM(s.CLSD_STF) = cls_res.staff_id
+        LEFT JOIN bridge_staff_id_resolution vrf_res ON TRIM(s.VRFC_STF) = vrf_res.staff_id
+        WHERE s.src_file = v_file;
+
+        SET v_loaded = ROW_COUNT();
+
+        -- Fewer rows means an inner join dropped data. More rows means join fan-out. Both abort and roll back this batch.
+        IF v_loaded <> v_expected THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'fact_inventory batch row count mismatch';
+        END IF;
+
+        COMMIT;
+    END LOOP;
+    CLOSE cur;
+END$$
+DELIMITER ;
+
+CALL load_fact_inventory();
+*/ 
+
+-- Validation - PASS
 SELECT check_name, found, expected,
        IF(found = expected, 'PASS', 'FAIL') AS result
 FROM (
@@ -1132,6 +1244,15 @@ FROM (
            (SELECT COUNT(*) FROM stg_inventory) AS expected
 ) t;
 
+-- Check if dim_inventory surrogate keys match with fact_inventory: 
+-- 1. Spot-check: same SKU, same key?
+SELECT inventory_key, material_sku
+FROM dim_inventory
+WHERE material_sku IN ('A0A286718', 'Z9Z900387')
+ORDER BY material_sku;
+
+-- 2. Whole-table fingerprint
+CHECKSUM TABLE dim_inventory;
 
 -- ==========================================================================================
 -- fact_supply_receipt
