@@ -1188,19 +1188,31 @@ FROM (
 -- dim_inventory
 -- Grain: one row per distinct MAT_SKU
 -- ==========================================================================================
+-- ==========================================================================================
+-- dim_inventory
+-- Grain: one row per distinct MAT_SKU
+-- MAT_SKU = MED_ID (346,302 of 346,302 match stg_medicine; 0 match stg_equipment),
+-- so each SKU links to dim_medicine via medicine_key (-1 = Unknown, no match).
+-- ==========================================================================================
 CREATE TABLE dim_inventory (
     inventory_key INT AUTO_INCREMENT PRIMARY KEY,
-    material_sku VARCHAR(50) NOT NULL,
-    UNIQUE (material_sku)
+    material_sku  VARCHAR(50) NOT NULL,
+    medicine_key  INT NOT NULL DEFAULT -1,
+    UNIQUE (material_sku),
+    INDEX idx_dim_inventory_medicine_key (medicine_key)
 );
 
-INSERT INTO dim_inventory (
-    material_sku
-)
-SELECT DISTINCT
-    MAT_SKU
-FROM stg_inventory
-WHERE MAT_SKU IS NOT NULL;
+-- Dedupe SKUs first, then join, so the 90M-row table is not joined directly
+INSERT INTO dim_inventory (material_sku, medicine_key)
+SELECT s.MAT_SKU,
+       COALESCE(m.medicine_key, -1)
+FROM (
+    SELECT DISTINCT MAT_SKU
+    FROM stg_inventory
+    WHERE MAT_SKU IS NOT NULL
+) s
+LEFT JOIN dim_medicine m
+       ON m.medicine_id = s.MAT_SKU;
 
 -- Validation
 SELECT check_name, found, expected,
@@ -1209,7 +1221,50 @@ FROM (
     SELECT 'dim_inventory rows = distinct stg_inventory MAT_SKU' AS check_name,
            (SELECT COUNT(*) FROM dim_inventory) AS found,
            (SELECT COUNT(DISTINCT MAT_SKU) FROM stg_inventory) AS expected
+    UNION ALL
+    SELECT 'dim_inventory SKUs with Unknown medicine (-1)',
+           (SELECT COUNT(*) FROM dim_inventory WHERE medicine_key = -1),
+           0
+    UNION ALL
+    SELECT 'dim_inventory medicine_key orphans (no dim_medicine row)',
+           (SELECT COUNT(*) FROM dim_inventory i
+              LEFT JOIN dim_medicine m ON m.medicine_key = i.medicine_key
+             WHERE m.medicine_key IS NULL),
+           0
 ) t;
+
+/*
+-- ==========================================================================================
+-- FALLBACK: dim_inventory medicine_key for databases built BEFORE this change
+-- Do NOT drop/rebuild dim_inventory if fact_inventory already exists (see note).
+-- Safe to re-run: skips the ALTER if the column is already there.
+-- ==========================================================================================
+SET @col_exists = (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'dim_inventory'
+      AND COLUMN_NAME  = 'medicine_key'
+);
+
+SET @ddl = IF(@col_exists = 0,
+    'ALTER TABLE dim_inventory
+         ADD COLUMN medicine_key INT NOT NULL DEFAULT -1,
+         ADD INDEX idx_dim_inventory_medicine_key (medicine_key)',
+    'SELECT ''medicine_key already exists, ALTER skipped'' AS note');
+
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- Fill the key (inventory_key > 0 satisfies Workbench safe-update mode)
+UPDATE dim_inventory i
+JOIN dim_medicine m ON m.medicine_id = i.material_sku
+SET i.medicine_key = m.medicine_key
+WHERE i.inventory_key > 0;
+
+-- Then re-run the validation SELECT from section 1.
+*/
+
 
 -- =============================================
 -- 4. BRIDGE TABLES
@@ -1498,3 +1553,4 @@ SELECT 'bridge_patient_allergy: rows with no matching patient (patient_key NULL)
 UNION ALL
 SELECT 'bridge_patient_allergy: rows with no matching allergy (allergy_key NULL)',
        (SELECT COUNT(*) FROM bridge_patient_allergy WHERE allergy_key IS NULL);
+       
